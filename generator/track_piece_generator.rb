@@ -655,17 +655,90 @@ class TrackPieceGenerator
   end
 
   def generate_output
-    FileUtils.mkdir_p(@output_dir)
-    pieces_dir = File.join(@output_dir, "pieces")
-    FileUtils.mkdir_p(pieces_dir)
+    # FileUtils.mkdir_p(@output_dir)
+    # pieces_dir = File.join(@output_dir, "pieces")
+    # FileUtils.mkdir_p(pieces_dir)
 
-    generate_layout_svg
-    @pieces.each { |p| generate_piece_svg(p, pieces_dir) }
-    generate_inventory
+    generate_split_svg
+    # generate_layout_svg
+    # @pieces.each { |p| generate_piece_svg(p, pieces_dir) }
+    # generate_inventory
 
-    puts "\n" + "=" * 60
-    puts "Output generated in: #{@output_dir}"
-    puts "=" * 60
+    # puts "\n" + "=" * 60
+    # puts "Output generated in: #{@output_dir}"
+    # puts "=" * 60
+  end
+
+  def generate_split_svg
+    # Get all points from all pieces for the full track path
+    all_points = @pieces.flat_map { |p| p.points.map(&:position) }
+    return if all_points.length < 2
+
+    min_x, max_x = all_points.map(&:x).minmax
+    min_y, max_y = all_points.map(&:y).minmax
+    padding = 50
+    width = max_x - min_x + padding * 2
+    height = max_y - min_y + padding * 2
+    offset_x = -min_x + padding
+    offset_y = -min_y + padding
+
+    svg = <<~SVG
+      <?xml version="1.0" encoding="UTF-8"?>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{width.round(1)} #{height.round(1)}" width="#{width.round(1)}" height="#{height.round(1)}">
+        <title>#{@track_name} - Split Markers</title>
+        <rect width="#{width.round(1)}" height="#{height.round(1)}" fill="#fafafa"/>
+        <g transform="translate(#{offset_x.round(2)}, #{offset_y.round(2)})">
+    SVG
+
+    # Draw the track as a single path (black stroke like original)
+    path_d = "M #{all_points.first.x.round(2)},#{all_points.first.y.round(2)} "
+    all_points[1..-1].each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
+    svg += %(<path d="#{path_d}" fill="none" stroke="#000" stroke-width="7.5" stroke-linejoin="round"/>\n)
+
+    # Draw red split markers at piece boundaries
+    split_marker_length = 20  # Length of the red marker line
+
+    @pieces.each_with_index do |piece, idx|
+      next if piece.points.empty?
+
+      # Mark the start of each piece (except the first one, which is the track start)
+      if idx > 0
+        start_pos = piece.points.first.position
+        start_tangent = piece.points.first.tangent
+        perp = start_tangent.perpendicular.normalize
+
+        # Draw perpendicular red line at split point
+        p1 = start_pos + perp * split_marker_length
+        p2 = start_pos - perp * split_marker_length
+
+        svg += %(<line x1="#{p1.x.round(2)}" y1="#{p1.y.round(2)}" x2="#{p2.x.round(2)}" y2="#{p2.y.round(2)}" stroke="#FF0000" stroke-width="3" stroke-linecap="round"/>\n)
+      end
+    end
+
+    # Also mark the track end/start connection point
+    if @pieces.any?
+      last_piece = @pieces.last
+      if last_piece.points.any?
+        end_pos = last_piece.points.last.position
+        end_tangent = last_piece.points.last.tangent
+        perp = end_tangent.perpendicular.normalize
+
+        p1 = end_pos + perp * split_marker_length
+        p2 = end_pos - perp * split_marker_length
+
+        svg += %(<line x1="#{p1.x.round(2)}" y1="#{p1.y.round(2)}" x2="#{p2.x.round(2)}" y2="#{p2.y.round(2)}" stroke="#FF0000" stroke-width="3" stroke-linecap="round"/>\n)
+      end
+    end
+
+    svg += %(</g>\n</svg>)
+
+    # Write to the same directory as input, not the output directory
+    path = File.join(File.dirname(File.expand_path(@input_file)), "#{@track_name}-split.svg")
+    File.write(path, svg)
+    puts "Generated: #{path}"
+
+    # Open in Preview
+    system("open", "-a", "Preview", path)
   end
 
   def generate_layout_svg
