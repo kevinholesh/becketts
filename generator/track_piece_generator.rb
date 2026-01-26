@@ -96,7 +96,7 @@ PIECE_OVERRIDES = {
 }
 
 # Show turn markers for debugging override geometry (T1, T2, etc. labels)
-SHOW_TURN_MARKERS = true
+SHOW_TURN_MARKERS = false
 
 #===============================================================================
 # MANUAL SPLIT CONFIGURATION
@@ -488,8 +488,8 @@ class PieceOverrideGenerator
     turn1_direction = :left   # :left or :right (in racing direction)
 
     # === TURN 2 (RIGHT) ===
-    turn2_radius = 2.5        # inches
-    turn2_angle = 90          # degrees
+    turn2_radius = 3        # inches
+    turn2_angle = 110          # degrees
     turn2_direction = :right  # :left or :right (in racing direction)
 
     all_points = []
