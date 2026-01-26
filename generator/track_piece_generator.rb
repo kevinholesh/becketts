@@ -45,8 +45,8 @@ TEST_CAR_OPACITY = 0.7
 # Track cross-section (U-shape profile, all in inches)
 # The track is a U-shaped channel: two sidewalls with the car riding in between
 INNER_TRACK_WIDTH_IN = 1.75   # Width of the channel where the car rides
-SIDEWALL_THICKNESS_IN = 0.25  # Thickness of each side wall
-SIDEWALL_HEIGHT_IN = 0.35     # Height of the side walls
+SIDEWALL_THICKNESS_IN = 0.2  # Thickness of each side wall
+SIDEWALL_HEIGHT_IN = 0.375     # Height of the side walls
 
 # Total track width = inner channel + two sidewalls
 TOTAL_TRACK_WIDTH_IN = INNER_TRACK_WIDTH_IN + (SIDEWALL_THICKNESS_IN * 2)
@@ -91,6 +91,7 @@ STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a strai
 # piece number and the override method to call. The method receives start/end points
 # and returns an array of points for the new path.
 PIECE_OVERRIDES = {
+  2 => :generate_piece_2_override,   # Adjust last turn to avoid piece 3/8 collision
   3 => :generate_piece_3_override,   # Replace tight chicane with wider sweeping curves
   11 => :generate_piece_11_override, # Replace 90° left with two turns (left then right)
 }
@@ -149,9 +150,9 @@ EDIT_PATH_WIDTH_IN = 0.5         # Thicker line for visibility
 EDIT_PATH_OPACITY = 0.3          # Full opacity for editing
 
 # Rendering toggles - disable to focus on path editing
-SHOW_SIDEWALLS = false            # Render the U-shaped track profile
+SHOW_SIDEWALLS = true            # Render the U-shaped track profile
 SHOW_TEST_CARS = false            # Render test car visualizations
-SHOW_WOOD_GRAIN = false           # Render grain direction lines
+SHOW_WOOD_GRAIN = true           # Render grain direction lines
 
 # Tight radius warning visualization
 SHOW_TIGHT_RADIUS_WARNINGS = false # Highlight curves that are too tight for cars
@@ -338,6 +339,73 @@ class PieceOverrideGenerator
 
   def self.clear_turn_markers
     @turn_markers = []
+  end
+
+  # Piece 2 override: Adjust last turn to go more left to avoid piece 3/8 collision
+  # NOTE: original_points are in raw t-order, which is OPPOSITE to racing direction
+  # Racing direction: piece 1 → piece 2 → piece 3
+  # So we need to reverse: entry is from end_pt (piece 1 side), exit is to start_pt (piece 3 side)
+  def self.generate_piece_2_override(original_points, start_pt, end_pt, entry_dir, exit_dir)
+    # REVERSE for racing direction: entry is from piece 1 (end_pt), exit is to piece 3 (start_pt)
+    racing_entry_pt = end_pt
+    racing_exit_pt = start_pt
+    racing_entry_dir = [-exit_dir[0], -exit_dir[1]]  # Reverse the exit direction
+    racing_exit_dir = [-entry_dir[0], -entry_dir[1]]  # Reverse the entry direction
+
+    # Normalize directions
+    entry_len = Math.sqrt(racing_entry_dir[0]**2 + racing_entry_dir[1]**2)
+    exit_len = Math.sqrt(racing_exit_dir[0]**2 + racing_exit_dir[1]**2)
+    entry_unit = [racing_entry_dir[0] / entry_len, racing_entry_dir[1] / entry_len]
+    exit_unit = [racing_exit_dir[0] / exit_len, racing_exit_dir[1] / exit_len]
+
+    # Use racing direction start/end
+    start_pt = racing_entry_pt
+    end_pt = racing_exit_pt
+
+    # === STRAIGHT RUNS (distance to travel before each turn) ===
+    straight1 = 0.0       # inches before turn 1
+
+    # === TURN 1 (adjust angle to go more left to avoid piece 3/8 collision) ===
+    turn1_radius = 7.0        # inches
+    turn1_angle = 50          # degrees - ADJUST THIS to turn more/less left
+    turn1_direction = :right   # :left or :right (in racing direction)
+
+    all_points = []
+    @turn_markers = []  # Clear previous markers
+
+    # Current position and direction
+    current_pt = start_pt
+    current_dir = entry_unit
+
+    # Straight run before Turn 1
+    if straight1 > 0
+      straight1_points = build_straight_run(current_pt, current_dir, straight1, 10)
+      all_points += straight1_points
+      current_pt = straight1_points.last
+    end
+
+    # Record Turn 1 start position
+    @turn_markers << { label: "T1", pt: current_pt.dup, dir: current_dir.dup }
+
+    # Build Turn 1 (flip direction since entry is reversed)
+    t1_actual = turn1_direction == :right ? :left : :right
+    turn1_points = build_arc_from_tangent(
+      current_pt, current_dir, turn1_radius, turn1_angle, t1_actual, 40
+    )
+    all_points += (all_points.empty? ? turn1_points : turn1_points[1..-1])
+    current_pt = turn1_points.last
+    current_dir = tangent_at_arc_end(current_dir, turn1_angle, t1_actual)
+
+    # Smooth connector to end point
+    connector_points = build_smooth_connector(
+      current_pt, current_dir, end_pt, exit_unit, 30
+    )
+
+    # Add connector
+    all_points += connector_points[1..-1]
+
+    # IMPORTANT: Reverse the points to return in raw t-order (opposite of racing direction)
+    all_points.reverse
   end
 
   # Piece 3 override: Build chicane from scratch, turn by turn
@@ -1774,74 +1842,9 @@ class SplitVisualizer
       end
     end
 
-    # Generate grain direction visualization for each piece
+    # Grain direction visualization will be generated after piece_data is available
+    # (so grain aligns with the blue edit path, not the original ghost track)
     grain_lines = []
-    if SHOW_GRAIN_DIRECTION && splits.length > 1
-      puts ""
-      puts "Grain Direction Analysis:"
-
-      # For each piece between consecutive splits (in display order)
-      (0...splits.length).each do |i|
-        t1 = splits[i]
-        t2 = splits[(i + 1) % splits.length]
-
-        # Determine actual t_start and t_end for the track segment
-        t_low = [t1, t2].min
-        t_high = [t1, t2].max
-
-        # Check if this is a wrap-around piece (gap > 0.5 means shorter path wraps through 0)
-        is_wraparound = (t_high - t_low) > 0.5
-
-        if is_wraparound
-          # Wrap-around case: piece goes from t_high to 1.0 and 0.0 to t_low
-          # Combine both segments for grain calculation
-          pts_high = analyzer.piece_points(t_high, 1.0)
-          pts_low = analyzer.piece_points(0.0, t_low)
-          piece_pts = pts_high + pts_low
-
-          # Calculate bounds from combined points
-          if piece_pts && piece_pts.length > 2
-            all_x = piece_pts.map { |p| p[0] }
-            all_y = piece_pts.map { |p| p[1] }
-            bounds = {
-              min_x: all_x.min, max_x: all_x.max,
-              min_y: all_y.min, max_y: all_y.max
-            }
-
-            # Use the larger segment for grain direction
-            if (1.0 - t_high) > t_low
-              grain_dir = analyzer.optimal_grain_direction(t_high, 1.0)
-            else
-              grain_dir = analyzer.optimal_grain_direction(0.0, t_low)
-            end
-          else
-            next
-          end
-
-          actual_start, actual_end = t_high, t_low  # For display purposes
-        else
-          actual_start, actual_end = t_low, t_high
-          grain_dir = analyzer.optimal_grain_direction(actual_start, actual_end)
-          bounds = analyzer.piece_bounds(actual_start, actual_end)
-          piece_pts = analyzer.piece_points(actual_start, actual_end)
-        end
-
-        next unless bounds && piece_pts && piece_pts.length > 2
-
-        # Calculate grain angle in degrees for display
-        grain_angle = Math.atan2(grain_dir[1], grain_dir[0]) * 180 / Math::PI
-
-        piece_num = i + 1
-        if is_wraparound
-          puts "  Piece #{piece_num}: t=#{t_high.round(3)}→1.0→0.0→#{t_low.round(3)} (wrap), grain angle: #{grain_angle.round(1)}°"
-        else
-          puts "  Piece #{piece_num}: t=#{actual_start.round(3)}-#{actual_end.round(3)}, grain angle: #{grain_angle.round(1)}°"
-        end
-
-        # Generate grain lines
-        grain_lines << generate_grain_lines_for_piece(grain_dir, bounds, piece_pts, path_data, actual_start, actual_end)
-      end
-    end
 
     # Tight radius warnings will be calculated later from piece_data (the modified/edit path)
     tight_warnings = []
@@ -1942,6 +1945,95 @@ class SplitVisualizer
     path_result = build_modified_path(analyzer, splits, path_data, splits_normalized)
     modified_path_data = path_result[:path]
     piece_data = path_result[:piece_data]
+
+    # Now generate grain direction using piece_data (the blue edit path)
+    if SHOW_GRAIN_DIRECTION && piece_data.any?
+      puts ""
+      puts "Grain Direction Analysis:"
+
+      # Group piece_data by piece_num (wrap-around pieces may have multiple segments)
+      pieces_by_num = {}
+      piece_data.each do |pd|
+        pieces_by_num[pd[:piece_num]] ||= []
+        pieces_by_num[pd[:piece_num]] << pd
+      end
+
+      pieces_by_num.each do |piece_num, segments|
+        # Combine all points for this piece
+        piece_pts = segments.flat_map { |s| s[:points] }
+        next if piece_pts.length < 2
+
+        # Calculate bounds
+        all_x = piece_pts.map { |p| p[0] }
+        all_y = piece_pts.map { |p| p[1] }
+        bounds = {
+          min_x: all_x.min, max_x: all_x.max,
+          min_y: all_y.min, max_y: all_y.max
+        }
+
+        # Calculate grain direction from piece points (sum of tangent vectors)
+        sum_x = 0.0
+        sum_y = 0.0
+        ref_dir = nil
+        (0...piece_pts.length - 1).each do |i|
+          dx = piece_pts[i + 1][0] - piece_pts[i][0]
+          dy = piece_pts[i + 1][1] - piece_pts[i][1]
+          len = Math.sqrt(dx * dx + dy * dy)
+          next if len < 0.0001
+          dx /= len
+          dy /= len
+
+          # Use first tangent as reference, flip others if they point opposite
+          if ref_dir.nil?
+            ref_dir = [dx, dy]
+            sum_x += dx
+            sum_y += dy
+          else
+            dot = dx * ref_dir[0] + dy * ref_dir[1]
+            if dot < 0
+              sum_x -= dx
+              sum_y -= dy
+            else
+              sum_x += dx
+              sum_y += dy
+            end
+          end
+        end
+
+        # Normalize
+        len = Math.sqrt(sum_x * sum_x + sum_y * sum_y)
+        grain_dir = len > 0.0001 ? [sum_x / len, sum_y / len] : [1.0, 0.0]
+
+        # Calculate grain angle
+        grain_angle = Math.atan2(grain_dir[1], grain_dir[0]) * 180 / Math::PI
+
+        # Get t values for display
+        t_start = segments.first[:t_start]
+        t_end = segments.last[:t_end]
+        is_wraparound = segments.length > 1
+
+        if is_wraparound
+          puts "  Piece #{piece_num}: t=#{t_start.round(3)}→1.0→0.0→#{t_end.round(3)} (wrap), grain angle: #{grain_angle.round(1)}°"
+        else
+          puts "  Piece #{piece_num}: t=#{t_start.round(3)}-#{t_end.round(3)}, grain angle: #{grain_angle.round(1)}°"
+        end
+
+        # Generate grain lines using the edit path points
+        grain_lines << generate_grain_lines_for_piece(grain_dir, bounds, piece_pts, path_data, t_start, t_end)
+      end
+    end
+
+    # Re-extract clip paths from grain lines now that they're populated
+    grain_clip_paths = []
+    grain_groups = []
+    grain_lines.each do |gl|
+      if gl =~ /(<clipPath[^>]*>.*?<\/clipPath>)/m
+        grain_clip_paths << $1
+      end
+      if gl =~ /(<g clip-path[^>]*>.*?<\/g>)/m
+        grain_groups << $1
+      end
+    end
 
     # Find and visualize tight radius sections on the EDIT PATH (modified path)
     if SHOW_TIGHT_RADIUS_WARNINGS
