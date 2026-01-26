@@ -129,7 +129,7 @@ MANUAL_SPLITS = [
 
 # Visual settings for split preview
 SPLIT_LINE_COLOR = '#FF0000'
-SPLIT_LINE_WIDTH = 2.0
+SPLIT_LINE_WIDTH = 1.0            # Thin line for precise split visualization
 SPLIT_LINE_LENGTH = 30.0          # Length of split indicator lines
 SVG_PADDING = 60.0                # White border padding around the SVG
 FLIP_LABEL_SPLITS = []            # Split numbers whose labels should be on opposite side
@@ -148,9 +148,9 @@ TRACK_COLOR = '#000000'           # Color of the rails
 # Grain direction visualization
 SHOW_GRAIN_DIRECTION = true       # Show optimal grain direction for each piece
 GRAIN_LINE_COLOR = '#5D3A1A'      # Dark brown for wood grain
-GRAIN_LINE_OPACITY = 0.7          # Darker opacity for grain lines
+GRAIN_LINE_OPACITY = 0.3          # Subtle grain lines
 GRAIN_LINE_SPACING = 3.0          # Spacing between grain lines (in SVG units)
-GRAIN_LINE_WIDTH = 0.8            # Width of grain lines
+GRAIN_LINE_WIDTH = 0.4            # Width of grain lines
 
 # Scale bar settings
 SHOW_SCALE_BAR = true             # Show scale reference in lower left
@@ -1348,8 +1348,8 @@ class SplitVisualizer
     # Create a polygon from the piece points (track centerline expanded to track width)
     clip_path_id = "grain-clip-#{(t_start * 1000).round}-#{(t_end * 1000).round}"
 
-    # Build clip path from piece points expanded to track width
-    half_width = TRACK_OUTER_WIDTH / 2.0 + 2  # Slightly wider to ensure coverage
+    # Build clip path from piece points expanded to exact track width
+    half_width = TRACK_OUTER_WIDTH / 2.0
 
     # Create outline by offsetting piece points in both perpendicular directions
     outline_points = []
@@ -1528,8 +1528,8 @@ class SplitVisualizer
       # Perpendicular to tangent
       perp = [-tangent[1], tangent[0]]
 
-      # Create a line perpendicular to the track at this point
-      half_len = SPLIT_LINE_LENGTH / 2
+      # Create a line perpendicular to the track, contained within track boundaries
+      half_len = TRACK_OUTER_WIDTH / 2.0
       x1 = point[0] - perp[0] * half_len
       y1 = point[1] - perp[1] * half_len
       x2 = point[0] + perp[0] * half_len
@@ -1537,14 +1537,13 @@ class SplitVisualizer
 
       split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH}"/>)
 
-      # Add numbered label offset from the split line
-      label_offset = half_len + 12  # Position label beyond the split line
-      # Flip label to opposite side if specified
-      label_side = FLIP_LABEL_SPLITS.include?(split_num) ? -1 : 1
-      label_x = point[0] + perp[0] * label_offset * label_side
-      label_y = point[1] + perp[1] * label_offset * label_side
+      # Add numbered label centered on the split line with white background
+      label_x = point[0]
+      label_y = point[1]
 
-      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="8" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
+      # Text with white outline/stroke behind it for readability
+      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="2" font-size="6" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
+      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="6" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
 
       puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
     end
@@ -1561,22 +1560,45 @@ class SplitVisualizer
         t2 = splits[(i + 1) % splits.length]
 
         # Determine actual t_start and t_end for the track segment
-        # Simply use the smaller t as start and larger as end
-        # Handle wrap-around only when the gap is more than half the track
         t_low = [t1, t2].min
         t_high = [t1, t2].max
 
-        if (t_high - t_low) > 0.5
+        # Check if this is a wrap-around piece (gap > 0.5 means shorter path wraps through 0)
+        is_wraparound = (t_high - t_low) > 0.5
+
+        if is_wraparound
           # Wrap-around case: piece goes from t_high to 1.0 and 0.0 to t_low
-          # For grain calculation, just use the larger segment
-          actual_start, actual_end = t_high, 1.0
+          # Combine both segments for grain calculation
+          pts_high = analyzer.piece_points(t_high, 1.0)
+          pts_low = analyzer.piece_points(0.0, t_low)
+          piece_pts = pts_high + pts_low
+
+          # Calculate bounds from combined points
+          if piece_pts && piece_pts.length > 2
+            all_x = piece_pts.map { |p| p[0] }
+            all_y = piece_pts.map { |p| p[1] }
+            bounds = {
+              min_x: all_x.min, max_x: all_x.max,
+              min_y: all_y.min, max_y: all_y.max
+            }
+
+            # Use the larger segment for grain direction
+            if (1.0 - t_high) > t_low
+              grain_dir = analyzer.optimal_grain_direction(t_high, 1.0)
+            else
+              grain_dir = analyzer.optimal_grain_direction(0.0, t_low)
+            end
+          else
+            next
+          end
+
+          actual_start, actual_end = t_high, t_low  # For display purposes
         else
           actual_start, actual_end = t_low, t_high
+          grain_dir = analyzer.optimal_grain_direction(actual_start, actual_end)
+          bounds = analyzer.piece_bounds(actual_start, actual_end)
+          piece_pts = analyzer.piece_points(actual_start, actual_end)
         end
-
-        grain_dir = analyzer.optimal_grain_direction(actual_start, actual_end)
-        bounds = analyzer.piece_bounds(actual_start, actual_end)
-        piece_pts = analyzer.piece_points(actual_start, actual_end)
 
         next unless bounds && piece_pts && piece_pts.length > 2
 
@@ -1584,7 +1606,11 @@ class SplitVisualizer
         grain_angle = Math.atan2(grain_dir[1], grain_dir[0]) * 180 / Math::PI
 
         piece_num = i + 1
-        puts "  Piece #{piece_num}: t=#{actual_start.round(3)}-#{actual_end.round(3)}, grain angle: #{grain_angle.round(1)}°"
+        if is_wraparound
+          puts "  Piece #{piece_num}: t=#{t_high.round(3)}→1.0→0.0→#{t_low.round(3)} (wrap), grain angle: #{grain_angle.round(1)}°"
+        else
+          puts "  Piece #{piece_num}: t=#{actual_start.round(3)}-#{actual_end.round(3)}, grain angle: #{grain_angle.round(1)}°"
+        end
 
         # Generate grain lines
         grain_lines << generate_grain_lines_for_piece(grain_dir, bounds, piece_pts, path_data, actual_start, actual_end)
