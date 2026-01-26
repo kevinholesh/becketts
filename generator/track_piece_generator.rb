@@ -47,6 +47,9 @@ SPLIT_AT_STRAIGHT_END = true      # Split where straights meet curves
 STRAIGHT_CURVATURE_MAX = 0.02     # Max curvature to be considered "straight"
 MIN_STRAIGHT_LENGTH = 0.03        # Minimum length (as fraction) to qualify as a straight
 
+# Straight piece simplification
+STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a straight line
+
 # Chicane protection - keep tight S-curves as single pieces
 CHICANE_PROTECTION = true         # Enable chicane detection
 CHICANE_ANGLE_THRESHOLD = 60.0    # Degrees - direction change that indicates a chicane
@@ -67,7 +70,12 @@ REVERSE_DIRECTION = true
 START_FINISH_T = 0.515
 
 MANUAL_SPLITS = [
-  0.47
+  0.475,
+  0.43,
+  0.40,
+  0.256,
+  0.23,
+  0.185
   # Add your split t-values here in racing order
   # Example: 0.55, 0.60, 0.70, ... (continuing from split 1 in racing direction)
 ]
@@ -98,7 +106,9 @@ GRAIN_LINE_WIDTH = 0.8            # Width of grain lines
 
 # Scale bar settings
 SHOW_SCALE_BAR = true             # Show scale reference in lower left
-SVG_UNITS_PER_INCH = 25.4         # How many SVG units equal 1 inch (25.4 if 1 unit = 1mm)
+# SVG stroke-width 7.5 = 70mm track width = 2.756 inches
+# So 1 inch = 7.5 / 2.756 = 2.72 SVG units
+SVG_UNITS_PER_INCH = 2.72         # Calibrated: SVG stroke 7.5 = 70mm track
 SCALE_BAR_COLOR = '#000000'       # Color of scale bar
 SCALE_BAR_HEIGHT = 4.0            # Height of the scale bar
 
@@ -596,6 +606,25 @@ class TrackAnalyzer
     @points[start_idx..end_idx]
   end
 
+  # Check if a piece is "straight enough" to be simplified to a line
+  def is_piece_straight?(t_start, t_end)
+    start_idx = (t_start * (@curvatures.length - 1)).round
+    end_idx = (t_end * (@curvatures.length - 1)).round
+
+    start_idx = [[start_idx, 0].max, @curvatures.length - 1].min
+    end_idx = [[end_idx, 0].max, @curvatures.length - 1].min
+
+    return false if end_idx <= start_idx
+
+    segment_curvatures = @curvatures[start_idx..end_idx]
+    avg_curvature = segment_curvatures.sum / segment_curvatures.length.to_f
+    max_curvature = segment_curvatures.max
+
+    # A piece is straight if its average curvature is below threshold
+    # and no point has extremely high curvature
+    avg_curvature < STRAIGHTEN_THRESHOLD && max_curvature < STRAIGHTEN_THRESHOLD * 3
+  end
+
   private
 
   def analyze
@@ -832,6 +861,61 @@ class SplitVisualizer
     svg
   end
 
+  # Build a modified path that straightens "straight enough" pieces
+  def build_modified_path(analyzer, splits, original_path_data)
+    # Get all t-values where we need to check for straightening
+    # These are the boundaries between pieces
+    all_t_values = splits.dup.sort
+
+    # Ensure we have 0.0 and 1.0
+    all_t_values.unshift(0.0) unless all_t_values.first == 0.0
+    all_t_values.push(1.0) unless all_t_values.last == 1.0
+    all_t_values = all_t_values.sort.uniq
+
+    # Build the path by going through each segment
+    path_commands = []
+    first_point = analyzer.point_at(0.0)
+    path_commands << "M #{first_point[0].round(3)} #{first_point[1].round(3)}"
+
+    straightened_pieces = []
+
+    (0...all_t_values.length - 1).each do |i|
+      t_start = all_t_values[i]
+      t_end = all_t_values[i + 1]
+
+      is_straight = analyzer.is_piece_straight?(t_start, t_end)
+
+      if is_straight
+        # Just draw a straight line to the end point
+        end_point = analyzer.point_at(t_end)
+        path_commands << "L #{end_point[0].round(3)} #{end_point[1].round(3)}"
+        straightened_pieces << [t_start, t_end]
+      else
+        # Use the original curve points as a polyline
+        piece_pts = analyzer.piece_points(t_start, t_end)
+
+        # Skip the first point (it's the end of the previous segment)
+        piece_pts[1..-1].each do |pt|
+          path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+        end
+      end
+    end
+
+    # Close the path
+    path_commands << "Z"
+
+    # Report straightened pieces
+    if straightened_pieces.any?
+      puts ""
+      puts "Straightened Pieces:"
+      straightened_pieces.each do |t_start, t_end|
+        puts "  t=#{t_start.round(3)} to #{t_end.round(3)} -> straightened"
+      end
+    end
+
+    path_commands.join(" ")
+  end
+
   def generate
     svg_content = File.read(@input_file)
 
@@ -995,15 +1079,19 @@ class SplitVisualizer
       end
     end
 
+    # Build a custom path that straightens "straight enough" pieces
+    # We need to generate path data for each piece
+    modified_path_data = build_modified_path(analyzer, splits, path_data)
+
     main_track = %(<defs>
 <mask id="railroad-mask">
-<path d="#{path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-<path d="#{path_data}" stroke="black" stroke-width="#{inner_gap_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<path d="#{modified_path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<path d="#{modified_path_data}" stroke="black" stroke-width="#{inner_gap_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </mask>
 #{grain_clip_paths.join("\n")}
 </defs>
 <g id="main-track">
-<path d="#{path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#railroad-mask)"/>
+<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#railroad-mask)"/>
 </g>)
 
     # Create grain direction group - uses per-piece polygon clip paths
@@ -1015,7 +1103,7 @@ class SplitVisualizer
     # Create scale bar in lower left corner
     scale_bar = ""
     if SHOW_SCALE_BAR
-      scale_length = SVG_UNITS_PER_INCH  # 1 inch in SVG units
+      scale_length = SVG_UNITS_PER_INCH * 12  # 12 inches (1 foot) in SVG units
       margin = 15.0
 
       # Position in lower left of padded viewbox
@@ -1027,7 +1115,7 @@ class SplitVisualizer
 <rect x="#{bar_x}" y="#{bar_y - SCALE_BAR_HEIGHT}" width="#{scale_length}" height="#{SCALE_BAR_HEIGHT}" fill="#{SCALE_BAR_COLOR}"/>
 <line x1="#{bar_x}" y1="#{bar_y - SCALE_BAR_HEIGHT - 2}" x2="#{bar_x}" y2="#{bar_y + 2}" stroke="#{SCALE_BAR_COLOR}" stroke-width="1.5"/>
 <line x1="#{bar_x + scale_length}" y1="#{bar_y - SCALE_BAR_HEIGHT - 2}" x2="#{bar_x + scale_length}" y2="#{bar_y + 2}" stroke="#{SCALE_BAR_COLOR}" stroke-width="1.5"/>
-<text x="#{bar_x + scale_length / 2}" y="#{bar_y - SCALE_BAR_HEIGHT - 6}" fill="#{SCALE_BAR_COLOR}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle">1 inch</text>
+<text x="#{bar_x + scale_length / 2}" y="#{bar_y - SCALE_BAR_HEIGHT - 6}" fill="#{SCALE_BAR_COLOR}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle">1 foot</text>
 </g>)
     end
 
@@ -1049,6 +1137,20 @@ class SplitVisualizer
       width_inches = track_width / SVG_UNITS_PER_INCH
       height_inches = track_height / SVG_UNITS_PER_INCH
 
+      # Format as feet and inches
+      def format_feet_inches(inches)
+        feet = (inches / 12).floor
+        remaining_inches = (inches % 12).round
+        if feet > 0
+          "#{feet}' #{remaining_inches}\""
+        else
+          "#{remaining_inches}\""
+        end
+      end
+
+      width_label = format_feet_inches(width_inches)
+      height_label = format_feet_inches(height_inches)
+
       dim_color = SCALE_BAR_COLOR
       dim_offset = 25.0  # Distance from track edge
       tick_size = 6.0
@@ -1063,12 +1165,12 @@ class SplitVisualizer
 <line x1="#{track_min_x}" y1="#{w_y}" x2="#{track_max_x}" y2="#{w_y}"/>
 <line x1="#{track_min_x}" y1="#{w_y - tick_size/2}" x2="#{track_min_x}" y2="#{w_y + tick_size/2}"/>
 <line x1="#{track_max_x}" y1="#{w_y - tick_size/2}" x2="#{track_max_x}" y2="#{w_y + tick_size/2}"/>
-<text x="#{(track_min_x + track_max_x) / 2}" y="#{w_y + 12}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle" stroke="none">#{width_inches.round}"</text>
+<text x="#{(track_min_x + track_max_x) / 2}" y="#{w_y + 12}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle" stroke="none">#{width_label}</text>
 <!-- Height dimension -->
 <line x1="#{h_x}" y1="#{track_min_y}" x2="#{h_x}" y2="#{track_max_y}"/>
 <line x1="#{h_x - tick_size/2}" y1="#{track_min_y}" x2="#{h_x + tick_size/2}" y2="#{track_min_y}"/>
 <line x1="#{h_x - tick_size/2}" y1="#{track_max_y}" x2="#{h_x + tick_size/2}" y2="#{track_max_y}"/>
-<text x="#{h_x + 8}" y="#{(track_min_y + track_max_y) / 2}" font-size="10" font-family="Arial, sans-serif" text-anchor="start" dominant-baseline="middle" stroke="none">#{height_inches.round}"</text>
+<text x="#{h_x + 8}" y="#{(track_min_y + track_max_y) / 2}" font-size="10" font-family="Arial, sans-serif" text-anchor="start" dominant-baseline="middle" stroke="none">#{height_label}</text>
 </g>)
     end
 
