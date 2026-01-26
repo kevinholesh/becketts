@@ -135,9 +135,12 @@ MANUAL_SPLITS = [
 #   }
 
 PIECE_TWEAKS = {
-  # 3 => { min_corner_radius: 2.5, inner_width_offset: 0.25 },
+  # 3 => { min_corner_radius: 2.5 },
+  5 => { curve_smoothing: 2 },
   # 11 => { min_corner_radius: 2.5, inner_width_offset: 0.0 },
 }
+
+
 
 # Visual settings for split preview (all dimensions in inches)
 SPLIT_LINE_COLOR = '#FF0000'
@@ -151,9 +154,21 @@ SVG_DISPLAY_SCALE = 8
 
 # Ghost track settings - shows original track for comparison
 SHOW_GHOST_TRACK = true           # Enable ghost track overlay
-GHOST_TRACK_COLOR = '#FF0000'     # Light gray for ghost
+GHOST_TRACK_COLOR = '#FF0000'     # Red for ghost (original track)
+GHOST_TRACK_WIDTH_IN = 0.3        # Line thickness (inches)
 GHOST_TRACK_OPACITY = 0.3         # Transparency (0-1)
 GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
+
+# Edit path settings - shows the editable centerline for curve editing
+SHOW_EDIT_PATH = true             # Enable blue edit path overlay
+EDIT_PATH_COLOR = '#0066FF'       # Blue for edit path
+EDIT_PATH_WIDTH_IN = 0.5         # Thicker line for visibility
+EDIT_PATH_OPACITY = 0.3          # Full opacity for editing
+
+# Rendering toggles - disable to focus on path editing
+SHOW_SIDEWALLS = false            # Render the U-shaped track profile
+SHOW_TEST_CARS = false            # Render test car visualizations
+SHOW_WOOD_GRAIN = false           # Render grain direction lines
 
 # Tight radius warning visualization
 SHOW_TIGHT_RADIUS_WARNINGS = false # Highlight curves that are too tight for cars
@@ -1707,8 +1722,6 @@ class SplitVisualizer
     if SHOW_GHOST_TRACK
       ghost_style = GHOST_TRACK_STYLE == 'dashed' ? 'stroke-dasharray="10,5"' : ''
 
-      ghost_stroke_width_in = 0.1
-
       if SCALING_MODE != :none && analyzer.scale_factor != 1.0
         # The scaled track's center = original track's center (scaling preserves center)
         # Use the track bounds already calculated above
@@ -1719,14 +1732,15 @@ class SplitVisualizer
         # Transform: move to origin, scale, move back to center
         # Since scaling preserves the center, we use the same center for both translates
         ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}" transform="translate(#{center_x}, #{center_y}) scale(#{scale}) translate(#{-center_x}, #{-center_y})">
-<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{ghost_stroke_width_in / scale}" fill="none" #{ghost_style}/>
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{GHOST_TRACK_WIDTH_IN / scale}" fill="none" #{ghost_style}/>
 </g>)
       else
         ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}">
-<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{ghost_stroke_width_in}" fill="none" #{ghost_style}/>
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{GHOST_TRACK_WIDTH_IN}" fill="none" #{ghost_style}/>
 </g>)
       end
     end
+
 
     # Create U-shaped track profile: two sidewalls with inner channel between them
     # The mask creates the channel by subtracting the inner width from the total width
@@ -1751,12 +1765,26 @@ class SplitVisualizer
     modified_path_data = path_result[:path]
     piece_data = path_result[:piece_data]
 
+    # Create edit path - the blue centerline for curve editing
+    # This shows the OUTPUT path (after straightening/smoothing) that will be used for sidewalls
+    edit_path = ""
+    if SHOW_EDIT_PATH
+      edit_path = %(<g id="edit-path">
+<path d="#{modified_path_data}" stroke="#{EDIT_PATH_COLOR}" stroke-width="#{EDIT_PATH_WIDTH_IN}" fill="none" opacity="#{EDIT_PATH_OPACITY}"/>
+</g>)
+    end
+
     # Generate per-piece track rendering (handles custom widths internally)
-    main_track = generate_track_svg(modified_path_data, inner_gap_width, piece_data, grain_clip_paths)
+    # Only render sidewalls if enabled
+    main_track = ""
+    if SHOW_SIDEWALLS
+      main_track = generate_track_svg(modified_path_data, inner_gap_width, piece_data, grain_clip_paths)
+    end
 
     # Create grain direction group - uses per-piece polygon clip paths
+    # Only render grain if enabled
     grain_group = ""
-    if grain_groups.any?
+    if SHOW_WOOD_GRAIN && grain_groups.any?
       grain_group = %(<g id="grain-direction">\n#{grain_groups.join("\n")}\n</g>)
     end
 
@@ -1852,8 +1880,9 @@ class SplitVisualizer
     # Remove the original path element - we'll replace it with our styled tracks
     modified_svg = modified_svg.sub(/<path[^>]+\/>/, '')
 
-    # Build content: background, grid, ghost track, main track
-    insert_content = "#{grid_defs}\n#{bg_rect}\n#{grid_rect}\n#{ghost_track}\n#{main_track}"
+    # Build content: background, grid, ghost track, edit path, main track
+    # Order: ghost track (red, original) -> edit path (blue, modified centerline) -> main track (sidewalls)
+    insert_content = "#{grid_defs}\n#{bg_rect}\n#{grid_rect}\n#{ghost_track}\n#{edit_path}\n#{main_track}"
 
     # Insert after opening <svg ...> tag (find the svg tag and insert after it)
     modified_svg = modified_svg.sub(/(<svg[^>]*>)/, "\\1\n#{insert_content}\n")
@@ -1864,9 +1893,9 @@ class SplitVisualizer
       warnings_group = %(<g id="tight-radius-warnings">\n#{tight_warnings.join("\n")}\n</g>)
     end
 
-    # Build test cars group
+    # Build test cars group - only if enabled
     test_cars_group = ""
-    if test_car_elements.any?
+    if SHOW_TEST_CARS && test_car_elements.any?
       test_cars_group = %(<g id="test-cars">\n#{test_car_elements.join("\n")}\n</g>)
     end
 
