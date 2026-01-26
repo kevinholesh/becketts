@@ -170,7 +170,7 @@ GHOST_TRACK_OPACITY = 0.4         # Transparency (0-1)
 GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
 
 # Tight radius warning visualization
-SHOW_TIGHT_RADIUS_WARNINGS = true # Highlight curves that are too tight for cars
+SHOW_TIGHT_RADIUS_WARNINGS = false # Highlight curves that are too tight for cars
 TIGHT_RADIUS_THRESHOLD_IN = 1.5   # Warn about radii below this (inches)
 TIGHT_RADIUS_COLOR = '#FF00FF'    # Magenta for warnings
 

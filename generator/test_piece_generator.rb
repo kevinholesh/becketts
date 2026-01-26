@@ -6,7 +6,7 @@
 # Edit the constants below to customize the test pieces
 
 # Test parameters
-RADII = [3.0, 3.5, 4.0, 4.5, 5.0]  # inches, centerline radius
+RADII = [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  # inches, centerline radius
 TRACK_WIDTHS = [1.75, 1.85, 1.95, 2.05]  # inches, inner channel width
 CUT_DEPTH = 0.375  # 3/8 inch
 ARC_DEGREES = 180  # degrees of arc (full half turn)
