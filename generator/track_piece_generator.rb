@@ -110,36 +110,9 @@ MANUAL_SPLITS = [
   0.56,  # Split 7
   0.60,  # Split 8
   0.745,  # Split 9
-  0.805,  # Split 10
+  0.82,  # Split 10
   0.89,   # Split 11
 ]
-
-
-#===============================================================================
-# PER-PIECE TWEAKS
-#===============================================================================
-# Customize individual pieces by piece number (1-indexed, matching labels in SVG)
-# Available options per piece:
-#   inner_width_offset: Offset from INNER_TRACK_WIDTH_IN (inches, positive = wider)
-#                       e.g., 0.25 makes the inner channel 0.25" wider than default
-#   curve_smoothing:    Smoothing iterations (0 = none, 1-5 = progressively smoother)
-#                       Each iteration averages adjacent points to soften corners
-#   min_corner_radius:  Minimum turn radius in inches. Corners tighter than this
-#                       will be pushed outward to achieve the minimum radius.
-#                       This loses fidelity but makes tight chicanes drivable.
-#
-# Example:
-#   PIECE_TWEAKS = {
-#     3 => { min_corner_radius: 1.5, inner_width_offset: 0.25 },
-#     7 => { curve_smoothing: 3 },
-#   }
-
-PIECE_TWEAKS = {
-  # 3 => { min_corner_radius: 2.5 },
-  5 => { curve_smoothing: 2 },
-  # 11 => { min_corner_radius: 2.5, inner_width_offset: 0.0 },
-}
-
 
 
 # Visual settings for split preview (all dimensions in inches)
@@ -669,143 +642,6 @@ class TrackAnalyzer
     avg_curvature < STRAIGHTEN_THRESHOLD && max_curvature < STRAIGHTEN_THRESHOLD * 3
   end
 
-  # Apply Chaikin-style curve smoothing to a set of points
-  # Each iteration smooths corners by averaging adjacent points
-  # iterations: 0 = no smoothing, 1-5 = progressively smoother curves
-  def smooth_points(points, iterations)
-    return points if iterations <= 0 || points.length < 3
-
-    result = points.dup
-
-    iterations.times do
-      smoothed = [result.first]  # Keep first point anchored
-
-      (1...result.length - 1).each do |i|
-        prev_pt = result[i - 1]
-        curr_pt = result[i]
-        next_pt = result[i + 1]
-
-        # Chaikin-style: create two new points at 25% and 75% between neighbors
-        # This softens corners while preserving the general shape
-        # For track smoothing, we use a gentler blend to avoid distorting too much
-        blend = 0.25  # How much to pull toward neighbors (0.25 = classic Chaikin)
-
-        new_x = curr_pt[0] * (1 - blend) + (prev_pt[0] + next_pt[0]) * (blend / 2)
-        new_y = curr_pt[1] * (1 - blend) + (prev_pt[1] + next_pt[1]) * (blend / 2)
-
-        smoothed << [new_x, new_y]
-      end
-
-      smoothed << result.last  # Keep last point anchored
-      result = smoothed
-    end
-
-    result
-  end
-
-  # Enforce a minimum corner radius by pushing out points that are too tight
-  # This iteratively adjusts points until all corners meet the minimum radius
-  # min_radius: minimum turn radius in inches
-  def enforce_min_radius(points, min_radius)
-    return points if points.length < 3 || min_radius <= 0
-
-    result = points.map(&:dup)
-    max_iterations = 50
-
-    max_iterations.times do |iter|
-      changed = false
-      curvatures = calculate_curvatures(result)
-
-      # Find the tightest point
-      max_curv_idx = nil
-      max_curv = 0
-
-      curvatures.each_with_index do |curv, i|
-        next if i == 0 || i == curvatures.length - 1  # Don't move endpoints
-        if curv > max_curv
-          max_curv = curv
-          max_curv_idx = i
-        end
-      end
-
-      break if max_curv_idx.nil?
-
-      current_radius = max_curv > 0.001 ? 1.0 / max_curv : Float::INFINITY
-      break if current_radius >= min_radius  # All corners are OK
-
-      # Push this point outward (away from the center of curvature)
-      # The center of curvature is perpendicular to the tangent
-      i = max_curv_idx
-      prev_pt = result[i - 1]
-      curr_pt = result[i]
-      next_pt = result[i + 1]
-
-      # Calculate tangent direction
-      dx = next_pt[0] - prev_pt[0]
-      dy = next_pt[1] - prev_pt[1]
-      len = Math.sqrt(dx * dx + dy * dy)
-      next if len < 0.001
-
-      # Perpendicular (normal) direction - this points toward center of curvature
-      # We need to determine which side the center is on using cross product
-      v1 = [curr_pt[0] - prev_pt[0], curr_pt[1] - prev_pt[1]]
-      v2 = [next_pt[0] - curr_pt[0], next_pt[1] - curr_pt[1]]
-      cross = v1[0] * v2[1] - v1[1] * v2[0]
-
-      # Normal pointing toward center of curvature
-      norm_x = -dy / len
-      norm_y = dx / len
-
-      # Flip if needed (center is on the side where cross product is positive)
-      if cross > 0
-        norm_x = -norm_x
-        norm_y = -norm_y
-      end
-
-      # Push point away from center of curvature (opposite to normal)
-      # Amount to push: difference between current radius and target radius
-      push_amount = (min_radius - current_radius) * 0.3  # Damped for stability
-      push_amount = [push_amount, min_radius * 0.1].min  # Limit max push per iteration
-
-      result[i] = [
-        curr_pt[0] - norm_x * push_amount,
-        curr_pt[1] - norm_y * push_amount
-      ]
-      changed = true
-    end
-
-    result
-  end
-
-  # Calculate curvature at each point from discrete points
-  def calculate_curvatures(points)
-    curvatures = [0.0]  # First point
-
-    (1...points.length - 1).each do |i|
-      prev_pt = points[i - 1]
-      curr_pt = points[i]
-      next_pt = points[i + 1]
-
-      # Vectors
-      v1 = [curr_pt[0] - prev_pt[0], curr_pt[1] - prev_pt[1]]
-      v2 = [next_pt[0] - curr_pt[0], next_pt[1] - curr_pt[1]]
-
-      # Cross product and lengths
-      cross = v1[0] * v2[1] - v1[1] * v2[0]
-      len1 = Math.sqrt(v1[0]**2 + v1[1]**2)
-      len2 = Math.sqrt(v2[0]**2 + v2[1]**2)
-      sum_vec = [v1[0] + v2[0], v1[1] + v2[1]]
-      sum_len = Math.sqrt(sum_vec[0]**2 + sum_vec[1]**2)
-
-      denom = len1 * len2 * sum_len
-      curv = denom > 0.001 ? (2 * cross.abs / denom) : 0
-      curvatures << curv
-    end
-
-    curvatures << 0.0  # Last point
-    curvatures
-  end
-
   private
 
   def analyze
@@ -1043,7 +879,6 @@ class SplitVisualizer
   end
 
   # Build a modified path that straightens "straight enough" pieces
-  # Also applies per-piece curve smoothing from PIECE_TWEAKS
   # Returns: { path: String, piece_data: Array of {piece_num, t_start, t_end, points} }
   def build_modified_path(analyzer, splits, original_path_data, splits_normalized)
     # Get all t-values where we need to check for straightening
@@ -1064,7 +899,6 @@ class SplitVisualizer
     path_commands << "M #{first_point[0].round(3)} #{first_point[1].round(3)}"
 
     straightened_pieces = []
-    smoothed_pieces = []
     piece_data = []  # Store piece info for per-piece rendering
 
     (0...all_t_values.length - 1).each do |i|
@@ -1073,14 +907,10 @@ class SplitVisualizer
 
       # Find which piece number this segment belongs to
       piece_num = find_piece_number(t_start, t_end, piece_t_ranges)
-      tweaks = PIECE_TWEAKS[piece_num] || {}
-      smoothing = tweaks[:curve_smoothing] || 0
-      min_radius = tweaks[:min_corner_radius]
 
       is_straight = analyzer.is_piece_straight?(t_start, t_end)
-      has_modifications = smoothing > 0 || min_radius
 
-      if is_straight && !has_modifications
+      if is_straight
         # Just draw a straight line to the end point
         end_point = analyzer.point_at(t_end)
         path_commands << "L #{end_point[0].round(3)} #{end_point[1].round(3)}"
@@ -1089,19 +919,6 @@ class SplitVisualizer
       else
         # Use the original curve points as a polyline
         piece_pts = analyzer.piece_points(t_start, t_end)
-
-        # Apply minimum corner radius if configured (do this first)
-        if min_radius
-          piece_pts = analyzer.enforce_min_radius(piece_pts, min_radius)
-          smoothed_pieces << [t_start, t_end, piece_num, "min_radius=#{min_radius}\""]
-        end
-
-        # Apply smoothing if configured (after radius enforcement)
-        if smoothing > 0
-          piece_pts = analyzer.smooth_points(piece_pts, smoothing)
-          smoothed_pieces << [t_start, t_end, piece_num, "#{smoothing} smoothing iterations"]
-        end
-
         piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: piece_pts }
 
         # Skip the first point (it's the end of the previous segment)
@@ -1120,15 +937,6 @@ class SplitVisualizer
       puts "Straightened Pieces:"
       straightened_pieces.each do |t_start, t_end, piece_num|
         puts "  Piece #{piece_num}: t=#{t_start.round(3)} to #{t_end.round(3)} -> straightened"
-      end
-    end
-
-    # Report modified pieces (smoothing, min radius, etc.)
-    if smoothed_pieces.any?
-      puts ""
-      puts "Modified Pieces:"
-      smoothed_pieces.each do |t_start, t_end, piece_num, description|
-        puts "  Piece #{piece_num}: t=#{t_start.round(3)} to #{t_end.round(3)} -> #{description}"
       end
     end
 
@@ -1187,28 +995,7 @@ class SplitVisualizer
   end
 
   # Generate SVG for the track by rendering each piece as individual sidewall polygons
-  # This ensures curve modifications and width tweaks are all part of one unified track
   def generate_track_svg(modified_path_data, default_inner_gap, piece_data, grain_clip_paths)
-    # Determine which pieces have custom widths
-    pieces_with_widths = piece_data.map do |pd|
-      tweaks = PIECE_TWEAKS[pd[:piece_num]] || {}
-      offset = tweaks[:inner_width_offset] || 0
-      target_width = INNER_TRACK_WIDTH_IN + offset
-      pd.merge(inner_width: target_width, offset: offset, has_custom_width: offset != 0)
-    end
-
-    # Report custom widths
-    custom_pieces = pieces_with_widths.select { |pd| pd[:has_custom_width] }
-    if custom_pieces.any?
-      puts ""
-      puts "Custom Track Widths (0.25\" hold + 1\" taper):"
-      custom_pieces.each do |pd|
-        total = pd[:inner_width] + (SIDEWALL_THICKNESS_IN * 2)
-        sign = pd[:offset] >= 0 ? "+" : ""
-        puts "  Piece #{pd[:piece_num]}: #{sign}#{pd[:offset]}\" offset -> inner=#{pd[:inner_width]}\" (total=#{total.round(2)}\")"
-      end
-    end
-
     svg_parts = []
 
     # Start with defs section
@@ -1220,25 +1007,14 @@ class SplitVisualizer
     svg_parts << %(<g id="main-track" data-inner-width="#{INNER_TRACK_WIDTH_IN}" data-sidewall-thickness="#{SIDEWALL_THICKNESS_IN}" data-sidewall-height="#{SIDEWALL_HEIGHT_IN}" data-total-width="#{TOTAL_TRACK_WIDTH_IN.round(2)}">)
     svg_parts << %(<!-- Track profile: #{SIDEWALL_THICKNESS_IN}" sidewalls | #{INNER_TRACK_WIDTH_IN}" inner channel | #{SIDEWALL_THICKNESS_IN}" sidewalls = #{TOTAL_TRACK_WIDTH_IN.round(2)}" total -->)
 
-    # Render each piece as sidewall polygons
-    pieces_with_widths.each do |pd|
-      if pd[:has_custom_width]
-        # Variable-width piece with smooth transitions
-        walls = build_variable_width_piece(pd[:points], INNER_TRACK_WIDTH_IN, pd[:inner_width])
-        next unless walls
+    # Render each piece as constant-width sidewall polygons
+    piece_data.each do |pd|
+      walls = build_constant_width_piece(pd[:points], INNER_TRACK_WIDTH_IN)
+      next unless walls
 
-        svg_parts << %(<!-- Piece #{pd[:piece_num]}: variable width #{INNER_TRACK_WIDTH_IN}" -> #{pd[:inner_width]}" -->)
-        svg_parts << %(<path d="#{walls[:left]}" fill="#{TRACK_COLOR}" stroke="none"/>)
-        svg_parts << %(<path d="#{walls[:right]}" fill="#{TRACK_COLOR}" stroke="none"/>)
-      else
-        # Default-width piece - render as constant-width sidewall polygons
-        walls = build_constant_width_piece(pd[:points], INNER_TRACK_WIDTH_IN)
-        next unless walls
-
-        svg_parts << %(<!-- Piece #{pd[:piece_num]} -->)
-        svg_parts << %(<path d="#{walls[:left]}" fill="#{TRACK_COLOR}" stroke="none"/>)
-        svg_parts << %(<path d="#{walls[:right]}" fill="#{TRACK_COLOR}" stroke="none"/>)
-      end
+      svg_parts << %(<!-- Piece #{pd[:piece_num]} -->)
+      svg_parts << %(<path d="#{walls[:left]}" fill="#{TRACK_COLOR}" stroke="none"/>)
+      svg_parts << %(<path d="#{walls[:right]}" fill="#{TRACK_COLOR}" stroke="none"/>)
     end
 
     svg_parts << "</g>"
@@ -1307,120 +1083,6 @@ class SplitVisualizer
       commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
     end
     commands.join(" ")
-  end
-
-  # Cubic ease-in-out function: smooth acceleration and deceleration
-  # t: 0.0 to 1.0, returns 0.0 to 1.0
-  def ease_in_out(t)
-    t = [[t, 0.0].max, 1.0].min
-    if t < 0.5
-      4 * t * t * t
-    else
-      1 - ((-2 * t + 2) ** 3) / 2
-    end
-  end
-
-  # Calculate cumulative distances along a path of points
-  def calculate_cumulative_distances(points)
-    distances = [0.0]
-    total = 0.0
-
-    (1...points.length).each do |i|
-      dx = points[i][0] - points[i-1][0]
-      dy = points[i][1] - points[i-1][1]
-      total += Math.sqrt(dx * dx + dy * dy)
-      distances << total
-    end
-
-    distances
-  end
-
-  # Build variable-width track piece with smooth transitions
-  # Returns SVG path data for two sidewall polygons
-  # Build variable-width track piece with smooth transitions
-  # Transition: 0.25" hold at start, 2" ease-in-out taper, same at end
-  def build_variable_width_piece(points, base_inner, target_inner, transition_start = 0.25, transition_length = 2.0)
-    return nil if points.nil? || points.length < 3
-
-    # Calculate cumulative distance along the centerline
-    distances = calculate_cumulative_distances(points)
-    total_length = distances.last
-
-    # Scale down transitions if piece is too short
-    min_piece_length = (transition_start + transition_length) * 2.5
-    if total_length < min_piece_length
-      scale = total_length / min_piece_length
-      transition_start *= scale
-      transition_length *= scale
-    end
-
-    # Transition zones
-    trans_in_end = transition_start + transition_length
-    trans_out_start = total_length - transition_start - transition_length
-    trans_out_end = total_length - transition_start
-
-    # Build left and right edges
-    outer_left = []
-    outer_right = []
-    inner_left = []
-    inner_right = []
-
-    points.each_with_index do |pt, i|
-      dist = distances[i]
-
-      # Calculate width at this point using ease-in-out transitions
-      if dist < transition_start
-        inner_width = base_inner
-      elsif dist < trans_in_end
-        t = ease_in_out((dist - transition_start) / transition_length)
-        inner_width = base_inner + (target_inner - base_inner) * t
-      elsif dist > trans_out_end
-        inner_width = base_inner
-      elsif dist > trans_out_start
-        t = ease_in_out((trans_out_end - dist) / transition_length)
-        inner_width = base_inner + (target_inner - base_inner) * t
-      else
-        inner_width = target_inner
-      end
-
-      total_width = inner_width + (SIDEWALL_THICKNESS_IN * 2)
-      half_total = total_width / 2.0
-      half_inner = inner_width / 2.0
-
-      # Calculate tangent direction
-      if i == 0
-        next_pt = points[1]
-        dx = next_pt[0] - pt[0]
-        dy = next_pt[1] - pt[1]
-      elsif i == points.length - 1
-        prev_pt = points[i - 1]
-        dx = pt[0] - prev_pt[0]
-        dy = pt[1] - prev_pt[1]
-      else
-        prev_pt = points[i - 1]
-        next_pt = points[i + 1]
-        dx = next_pt[0] - prev_pt[0]
-        dy = next_pt[1] - prev_pt[1]
-      end
-
-      len = Math.sqrt(dx * dx + dy * dy)
-      next if len < 0.001
-
-      # Perpendicular direction
-      norm_x = -dy / len
-      norm_y = dx / len
-
-      outer_left << [pt[0] + norm_x * half_total, pt[1] + norm_y * half_total]
-      outer_right << [pt[0] - norm_x * half_total, pt[1] - norm_y * half_total]
-      inner_left << [pt[0] + norm_x * half_inner, pt[1] + norm_y * half_inner]
-      inner_right << [pt[0] - norm_x * half_inner, pt[1] - norm_y * half_inner]
-    end
-
-    # Build SVG paths for left and right sidewalls
-    left_wall = outer_left + inner_left.reverse
-    right_wall = outer_right + inner_right.reverse
-
-    { left: polygon_to_path(left_wall), right: polygon_to_path(right_wall) }
   end
 
   # Convert a closed polygon to SVG path
