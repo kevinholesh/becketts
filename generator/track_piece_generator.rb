@@ -18,7 +18,7 @@ CAR_WIDTH_MM = 32.0       # ~1.25 inches
 CAR_HEIGHT_MM = 20.0      # ~0.8 inches
 
 # Track dimensions (in mm)
-TRACK_WIDTH_MM = 50.0     # Lane width - enough clearance for the car
+TRACK_WIDTH_MM = 60.0     # Lane width - enough clearance for the car
 WALL_HEIGHT_MM = 10.0     # Side wall height to keep cars on track
 
 # Turning constraints (in mm)
@@ -42,6 +42,11 @@ SIMPLIFY_THRESHOLD_DEG = 10.0     # Angle threshold for "straight" detection
 MIN_SPLIT_SPACING = 0.05          # Minimum spacing between splits (as fraction of path)
 CURVATURE_THRESHOLD = 0.15        # Threshold for detecting significant curves
 
+# Straight-to-curve splitting
+SPLIT_AT_STRAIGHT_END = true      # Split where straights meet curves
+STRAIGHT_CURVATURE_MAX = 0.02     # Max curvature to be considered "straight"
+MIN_STRAIGHT_LENGTH = 0.03        # Minimum length (as fraction) to qualify as a straight
+
 # Chicane protection - keep tight S-curves as single pieces
 CHICANE_PROTECTION = true         # Enable chicane detection
 CHICANE_ANGLE_THRESHOLD = 60.0    # Degrees - direction change that indicates a chicane
@@ -61,6 +66,17 @@ SPLIT_LINE_COLOR = '#FF0000'
 SPLIT_LINE_WIDTH = 2.0
 SPLIT_LINE_LENGTH = 30.0          # Length of split indicator lines
 SVG_PADDING = 40.0                # White border padding around the SVG
+
+# Ghost track settings - shows original track for comparison
+SHOW_GHOST_TRACK = true           # Enable ghost track overlay
+GHOST_TRACK_COLOR = '#FF0000'     # Light gray for ghost
+GHOST_TRACK_OPACITY = 0.5         # Transparency (0-1)
+GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
+
+# Main track visual style - "railroad" style with two rails and gap
+TRACK_OUTER_WIDTH = 12.0          # Total width of the track (outer edges)
+TRACK_RAIL_WIDTH = 2.5            # Width of each rail line
+TRACK_COLOR = '#000000'           # Color of the rails
 
 #===============================================================================
 # SVG PATH PARSER
@@ -265,6 +281,11 @@ class TrackAnalyzer
       end
     end
 
+    # Add splits at straight-to-curve transitions
+    if SPLIT_AT_STRAIGHT_END
+      merged = add_straight_curve_splits(merged)
+    end
+
     # Apply special pieces - remove splits within special piece ranges
     # and add splits at their boundaries
     final_splits = apply_special_pieces(merged)
@@ -275,6 +296,73 @@ class TrackAnalyzer
     end
 
     final_splits
+  end
+
+  def add_straight_curve_splits(splits)
+    # Find straight sections and add splits at their ends (where curves begin)
+    window = 10
+    smoothed = smooth_curvatures(window)
+
+    straight_transitions = []
+
+    # Scan through the track looking for straight-to-curve transitions
+    in_straight = false
+    straight_start = 0
+
+    smoothed.each_with_index do |curv, i|
+      t_value = i.to_f / smoothed.length
+      is_straight = curv < STRAIGHT_CURVATURE_MAX
+
+      if is_straight && !in_straight
+        # Starting a straight section
+        in_straight = true
+        straight_start = t_value
+      elsif !is_straight && in_straight
+        # Ending a straight section - this is where we want to split
+        straight_length = t_value - straight_start
+        if straight_length >= MIN_STRAIGHT_LENGTH
+          # Add split at the end of the straight (beginning of curve)
+          straight_transitions << { t: t_value, type: :straight_end }
+        end
+        in_straight = false
+      end
+    end
+
+    # Also detect curve-to-straight transitions (beginning of straights)
+    in_curve = false
+    curve_start = 0
+    smoothed.each_with_index do |curv, i|
+      t_value = i.to_f / smoothed.length
+      is_curve = curv >= STRAIGHT_CURVATURE_MAX * 2
+
+      if is_curve && !in_curve
+        in_curve = true
+        curve_start = t_value
+      elsif !is_curve && in_curve
+        # Exiting a curve into a straight
+        # Look ahead to confirm this is actually a straight
+        look_ahead = [i + 20, smoothed.length - 1].min
+        upcoming_avg = smoothed[i..look_ahead].sum / (look_ahead - i + 1).to_f
+        if upcoming_avg < STRAIGHT_CURVATURE_MAX
+          straight_transitions << { t: t_value, type: :straight_start }
+        end
+        in_curve = false
+      end
+    end
+
+    # Merge new splits with existing ones
+    new_splits = straight_transitions.map { |st| st[:t] }
+    all_splits = (splits + new_splits).sort.uniq
+
+    # Remove duplicates that are too close
+    merged = [all_splits.first]
+    all_splits[1..-1].each do |s|
+      if (s - merged.last) >= MIN_SPLIT_SPACING * 0.4
+        merged << s
+      end
+    end
+
+    merged
   end
 
   def apply_special_pieces(splits)
@@ -639,14 +727,41 @@ class SplitVisualizer
     bg_rect = %(<rect x="#{viewbox[0] - SVG_PADDING}" y="#{viewbox[1] - SVG_PADDING}" width="#{viewbox[2] + SVG_PADDING * 2}" height="#{viewbox[3] + SVG_PADDING * 2}" fill="white"/>)
     split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
 
+    # Create ghost track if enabled (thin line for comparison)
+    ghost_track = ""
+    if SHOW_GHOST_TRACK
+      ghost_style = GHOST_TRACK_STYLE == 'dashed' ? 'stroke-dasharray="10,5"' : ''
+      ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}">
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="2" fill="none" #{ghost_style}/>
+</g>)
+    end
+
+    # Create railroad-style main track with truly transparent gap using SVG mask
+    inner_gap_width = TRACK_OUTER_WIDTH - (TRACK_RAIL_WIDTH * 2)
+    main_track = %(<defs>
+<mask id="railroad-mask">
+<path d="#{path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<path d="#{path_data}" stroke="black" stroke-width="#{inner_gap_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</mask>
+</defs>
+<g id="main-track">
+<path d="#{path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#railroad-mask)"/>
+</g>)
+
     # Update SVG dimensions and viewBox
     modified_svg = svg_content.dup
     modified_svg = modified_svg.sub(/width="[^"]+"/, %(width="#{padded_width.round(2)}"))
     modified_svg = modified_svg.sub(/height="[^"]+"/, %(height="#{padded_height.round(2)}"))
     modified_svg = modified_svg.sub(/viewBox="[^"]+"/, %(viewBox="#{padded_viewbox}"))
 
-    # Insert background right after the opening <svg> tag
-    modified_svg = modified_svg.sub(/>(\s*<path)/, ">\n#{bg_rect}\\1")
+    # Remove the original path element - we'll replace it with our styled tracks
+    modified_svg = modified_svg.sub(/<path[^>]+\/>/, '')
+
+    # Build content: background, ghost track, main track
+    insert_content = "#{bg_rect}\n#{ghost_track}\n#{main_track}"
+
+    # Insert after opening <svg ...> tag (find the svg tag and insert after it)
+    modified_svg = modified_svg.sub(/(<svg[^>]*>)/, "\\1\n#{insert_content}\n")
 
     # Insert split lines before closing </svg>
     modified_svg = modified_svg.sub(/<\/svg>/, "#{split_group}\n</svg>")
