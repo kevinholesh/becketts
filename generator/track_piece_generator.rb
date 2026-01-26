@@ -114,11 +114,10 @@ MANUAL_SPLITS = [
   0.625
 ]
 
-# Visual settings for split preview
+# Visual settings for split preview (all dimensions in inches)
 SPLIT_LINE_COLOR = '#FF0000'
-SPLIT_LINE_WIDTH = 1.0            # Thin line for precise split visualization
-SPLIT_LINE_LENGTH = 30.0          # Length of split indicator lines
-SVG_PADDING = 60.0                # White border padding around the SVG
+SPLIT_LINE_WIDTH_IN = 0.1         # Thin line for precise split visualization
+SVG_PADDING_IN = 5.0              # White border padding around the SVG (inches)
 FLIP_LABEL_SPLITS = []            # Split numbers whose labels should be on opposite side
 
 # Ghost track settings - shows original track for comparison
@@ -128,24 +127,22 @@ GHOST_TRACK_OPACITY = 0.5         # Transparency (0-1)
 GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
 
 # Main track visual style - "railroad" style with two rails and gap
-TRACK_OUTER_WIDTH = 12.0          # Total width of the track (outer edges)
-TRACK_RAIL_WIDTH = 1.0            # Width of each rail line (thinner = see piece size better)
-TRACK_COLOR = '#000000'           # Color of the rails
+# NOTE: All dimensions below are in INCHES (output SVG uses 1 unit = 1 inch for CNC)
+TRACK_OUTER_WIDTH_IN = TRACK_WIDTH_IN  # Use the track width constant (1.6")
+TRACK_RAIL_WIDTH_IN = 0.1              # Width of each rail line
+TRACK_COLOR = '#000000'                # Color of the rails
 
 # Grain direction visualization
 SHOW_GRAIN_DIRECTION = true       # Show optimal grain direction for each piece
 GRAIN_LINE_COLOR = '#5D3A1A'      # Dark brown for wood grain
 GRAIN_LINE_OPACITY = 0.3          # Subtle grain lines
-GRAIN_LINE_SPACING = 3.0          # Spacing between grain lines (in SVG units)
-GRAIN_LINE_WIDTH = 0.4            # Width of grain lines
+GRAIN_LINE_SPACING_IN = 0.4       # Spacing between grain lines (inches)
+GRAIN_LINE_WIDTH_IN = 0.05        # Width of grain lines (inches)
 
 # Scale bar settings
 SHOW_SCALE_BAR = true             # Show scale reference in lower left
-# SVG stroke-width 7.5 = 2.756 inch track width
-# So 1 inch = 7.5 / 2.756 = 2.72 SVG units
-SVG_UNITS_PER_INCH = 2.72         # Calibrated: SVG stroke 7.5 = 2.756" track
 SCALE_BAR_COLOR = '#000000'       # Color of scale bar
-SCALE_BAR_HEIGHT = 4.0            # Height of the scale bar
+SCALE_BAR_HEIGHT_IN = 0.5         # Height of the scale bar (inches)
 
 #===============================================================================
 # SVG PATH PARSER
@@ -283,10 +280,12 @@ class TrackScaler
   private
 
   def calculate_base_scale_factor
+    # Scale so output coordinates are directly in inches (1 SVG unit = 1 inch)
+    # This makes CNC import straightforward
     bounds = calculate_bounds(@original_points)
     max_dim_svg = [bounds[:width], bounds[:height]].max
-    current_inches = max_dim_svg / SVG_UNITS_PER_INCH
-    TARGET_MAX_DIMENSION_IN / current_inches
+    # scale_factor converts original SVG units to inches
+    TARGET_MAX_DIMENSION_IN / max_dim_svg
   end
 
   def calculate_bounds(points)
@@ -306,17 +305,19 @@ class TrackScaler
 
   def report_original_dimensions
     bounds = calculate_bounds(@original_points)
-    width_in = bounds[:width] / SVG_UNITS_PER_INCH
-    height_in = bounds[:height] / SVG_UNITS_PER_INCH
-    puts "Original: #{width_in.round(1)}\" x #{height_in.round(1)}\" (#{format_feet_inches(width_in)} x #{format_feet_inches(height_in)})"
+    # Original dimensions are in arbitrary SVG units - estimate based on scale factor
+    # After scaling, we'll have the target dimensions
+    puts "Original SVG bounds: #{bounds[:width].round(1)} x #{bounds[:height].round(1)} units"
   end
 
   def report_scaled_dimensions
     bounds = calculate_bounds(@scaled_points)
-    width_in = bounds[:width] / SVG_UNITS_PER_INCH
-    height_in = bounds[:height] / SVG_UNITS_PER_INCH
-    puts "Scaled:   #{width_in.round(1)}\" x #{height_in.round(1)}\" (#{format_feet_inches(width_in)} x #{format_feet_inches(height_in)})"
-    puts "Scale factor: #{@scale_factor.round(4)} (#{(@scale_factor * 100).round(1)}%)"
+    # After scaling, coordinates ARE in inches (1 unit = 1 inch)
+    width_in = bounds[:width]
+    height_in = bounds[:height]
+    puts "Output:   #{width_in.round(1)}\" x #{height_in.round(1)}\" (#{format_feet_inches(width_in)} x #{format_feet_inches(height_in)})"
+    puts "Scale factor: #{@scale_factor.round(6)}"
+    puts "Output units: 1 SVG unit = 1 inch (CNC-ready)"
 
     # Check for radius violations
     check_radius_violations
@@ -334,8 +335,8 @@ class TrackScaler
 
     @scaled_curvatures.each do |curv|
       next if curv < 0.0001  # Skip near-zero curvature (straight sections)
-      radius_svg = 1.0 / curv
-      radius_in = radius_svg / SVG_UNITS_PER_INCH
+      # After scaling, radius is directly in inches (1/curvature)
+      radius_in = 1.0 / curv
       min_radius_found = [min_radius_found, radius_in].min
       violations += 1 if radius_in < MIN_TURN_RADIUS_IN
     end
@@ -989,12 +990,12 @@ class SplitVisualizer
     diagonal = Math.sqrt((bounds[:max_x] - bounds[:min_x])**2 + (bounds[:max_y] - bounds[:min_y])**2)
 
     # Number of lines needed to cover the piece
-    num_lines = (diagonal / GRAIN_LINE_SPACING).ceil + 2
+    num_lines = (diagonal / GRAIN_LINE_SPACING_IN).ceil + 2
 
     # Generate parallel lines along the grain direction
     (-num_lines..num_lines).each do |i|
       # Offset from center along perpendicular direction
-      offset = i * GRAIN_LINE_SPACING
+      offset = i * GRAIN_LINE_SPACING_IN
 
       # Line passes through this point and extends in grain direction
       base_x = center_x + perp[0] * offset
@@ -1015,7 +1016,7 @@ class SplitVisualizer
     clip_path_id = "grain-clip-#{(t_start * 1000).round}-#{(t_end * 1000).round}"
 
     # Build clip path from piece points expanded to exact track width
-    half_width = TRACK_OUTER_WIDTH / 2.0
+    half_width = TRACK_OUTER_WIDTH_IN / 2.0
 
     # Create outline by offsetting piece points in both perpendicular directions
     outline_points = []
@@ -1086,7 +1087,7 @@ class SplitVisualizer
 
     svg += %(<g clip-path="url(##{clip_path_id})" opacity="#{GRAIN_LINE_OPACITY}">\n)
     lines.each do |line|
-      svg += %(<line x1="#{line[0].round(2)}" y1="#{line[1].round(2)}" x2="#{line[2].round(2)}" y2="#{line[3].round(2)}" stroke="#{GRAIN_LINE_COLOR}" stroke-width="#{GRAIN_LINE_WIDTH}"/>\n)
+      svg += %(<line x1="#{line[0].round(2)}" y1="#{line[1].round(2)}" x2="#{line[2].round(2)}" y2="#{line[3].round(2)}" stroke="#{GRAIN_LINE_COLOR}" stroke-width="#{GRAIN_LINE_WIDTH_IN}"/>\n)
     end
     svg += %(</g>\n)
 
@@ -1186,6 +1187,9 @@ class SplitVisualizer
     # Generate split lines with numbered labels
     split_lines = []
     split_labels = []
+    label_font_size_in = 0.5
+    label_stroke_width_in = 0.15
+
     splits.each_with_index do |t, i|
       split_num = i + 1
       point = analyzer.point_at(t)
@@ -1195,21 +1199,21 @@ class SplitVisualizer
       perp = [-tangent[1], tangent[0]]
 
       # Create a line perpendicular to the track, contained within track boundaries
-      half_len = TRACK_OUTER_WIDTH / 2.0
+      half_len = TRACK_OUTER_WIDTH_IN / 2.0
       x1 = point[0] - perp[0] * half_len
       y1 = point[1] - perp[1] * half_len
       x2 = point[0] + perp[0] * half_len
       y2 = point[1] + perp[1] * half_len
 
-      split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH}"/>)
+      split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH_IN}"/>)
 
       # Add numbered label centered on the split line with white background
       label_x = point[0]
       label_y = point[1]
 
       # Text with white outline/stroke behind it for readability
-      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="2" font-size="6" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
-      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="6" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
+      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="#{label_stroke_width_in}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
+      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
 
       puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
     end
@@ -1283,25 +1287,32 @@ class SplitVisualizer
       end
     end
 
-    # Extract dimensions
-    width = svg_content[/width="([^"]+)"/, 1].to_f
-    height = svg_content[/height="([^"]+)"/, 1].to_f
-    viewbox_match = svg_content.match(/viewBox="([^"]+)"/)
-    viewbox = viewbox_match ? viewbox_match[1].split.map(&:to_f) : [0, 0, width, height]
+    # Calculate dimensions from actual track bounds (not original SVG)
+    track_all_x = analyzer.points.map { |p| p[0] }
+    track_all_y = analyzer.points.map { |p| p[1] }
+    track_min_x = track_all_x.min
+    track_max_x = track_all_x.max
+    track_min_y = track_all_y.min
+    track_max_y = track_all_y.max
 
-    # Calculate padded dimensions
-    padded_width = width + (SVG_PADDING * 2)
-    padded_height = height + (SVG_PADDING * 2)
-    padded_viewbox = [
-      viewbox[0] - SVG_PADDING,
-      viewbox[1] - SVG_PADDING,
-      viewbox[2] + (SVG_PADDING * 2),
-      viewbox[3] + (SVG_PADDING * 2)
-    ].map { |v| v.round(4) }.join(' ')
+    # Add margin for dimension lines and labels (in inches)
+    dim_margin_in = 4.0  # Space for dimension lines below and to the right
+
+    # Calculate viewbox based on track bounds + margins (all in inches now)
+    viewbox_x = track_min_x - SVG_PADDING_IN
+    viewbox_y = track_min_y - SVG_PADDING_IN
+    viewbox_width = (track_max_x - track_min_x) + SVG_PADDING_IN * 2 + dim_margin_in
+    viewbox_height = (track_max_y - track_min_y) + SVG_PADDING_IN * 2 + dim_margin_in
+
+    padded_viewbox = [viewbox_x, viewbox_y, viewbox_width, viewbox_height].map { |v| v.round(4) }.join(' ')
+
+    # SVG pixel dimensions (1:1 with viewbox units)
+    padded_width = viewbox_width
+    padded_height = viewbox_height
 
     # Build modified SVG with padding
-    # Create a larger background rect that covers the padded area
-    bg_rect = %(<rect x="#{viewbox[0] - SVG_PADDING}" y="#{viewbox[1] - SVG_PADDING}" width="#{viewbox[2] + SVG_PADDING * 2}" height="#{viewbox[3] + SVG_PADDING * 2}" fill="white"/>)
+    # Create a background rect that covers the viewbox area
+    bg_rect = %(<rect x="#{viewbox_x}" y="#{viewbox_y}" width="#{viewbox_width}" height="#{viewbox_height}" fill="white"/>)
     split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
     label_group = %(<g id="split-labels">\n#{split_labels.join("\n")}\n</g>)
 
@@ -1311,29 +1322,29 @@ class SplitVisualizer
     if SHOW_GHOST_TRACK
       ghost_style = GHOST_TRACK_STYLE == 'dashed' ? 'stroke-dasharray="10,5"' : ''
 
+      ghost_stroke_width_in = 0.1
+
       if SCALING_MODE != :none && analyzer.scale_factor != 1.0
         # The scaled track's center = original track's center (scaling preserves center)
-        # So use the center of the current (scaled) analyzer points
-        all_x = analyzer.points.map { |p| p[0] }
-        all_y = analyzer.points.map { |p| p[1] }
-        center_x = (all_x.min + all_x.max) / 2.0
-        center_y = (all_y.min + all_y.max) / 2.0
+        # Use the track bounds already calculated above
+        center_x = (track_min_x + track_max_x) / 2.0
+        center_y = (track_min_y + track_max_y) / 2.0
 
         scale = analyzer.scale_factor
         # Transform: move to origin, scale, move back to center
         # Since scaling preserves the center, we use the same center for both translates
         ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}" transform="translate(#{center_x}, #{center_y}) scale(#{scale}) translate(#{-center_x}, #{-center_y})">
-<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{1.5 / scale}" fill="none" #{ghost_style}/>
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{ghost_stroke_width_in / scale}" fill="none" #{ghost_style}/>
 </g>)
       else
         ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}">
-<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="1.5" fill="none" #{ghost_style}/>
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{ghost_stroke_width_in}" fill="none" #{ghost_style}/>
 </g>)
       end
     end
 
     # Create railroad-style main track with truly transparent gap using SVG mask
-    inner_gap_width = TRACK_OUTER_WIDTH - (TRACK_RAIL_WIDTH * 2)
+    inner_gap_width = TRACK_OUTER_WIDTH_IN - (TRACK_RAIL_WIDTH_IN * 2)
 
     # Extract clip paths from grain lines (they go in <defs>)
     grain_clip_paths = []
@@ -1354,13 +1365,13 @@ class SplitVisualizer
 
     main_track = %(<defs>
 <mask id="railroad-mask">
-<path d="#{modified_path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<path d="#{modified_path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 <path d="#{modified_path_data}" stroke="black" stroke-width="#{inner_gap_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </mask>
 #{grain_clip_paths.join("\n")}
 </defs>
 <g id="main-track">
-<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#railroad-mask)"/>
+<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#railroad-mask)"/>
 </g>)
 
     # Create grain direction group - uses per-piece polygon clip paths
@@ -1372,39 +1383,33 @@ class SplitVisualizer
     # Create scale bar in lower left corner
     scale_bar = ""
     if SHOW_SCALE_BAR
-      scale_length = SVG_UNITS_PER_INCH * 12  # 12 inches (1 foot) in SVG units
-      margin = 15.0
+      scale_length = 12.0  # 12 inches (1 foot) - output is in inches so 1 unit = 1 inch
+      margin_in = 1.5
 
       # Position in lower left of padded viewbox
-      bar_x = viewbox[0] - SVG_PADDING + margin
-      bar_y = viewbox[1] + viewbox[3] + SVG_PADDING - margin
+      bar_x = viewbox_x + margin_in
+      bar_y = viewbox_y + viewbox_height - margin_in
+
+      tick_height = 0.2
+      stroke_width = 0.05
+      font_size = 0.8
 
       # Scale bar: horizontal line with end caps
       scale_bar = %(<g id="scale-bar">
-<rect x="#{bar_x}" y="#{bar_y - SCALE_BAR_HEIGHT}" width="#{scale_length}" height="#{SCALE_BAR_HEIGHT}" fill="#{SCALE_BAR_COLOR}"/>
-<line x1="#{bar_x}" y1="#{bar_y - SCALE_BAR_HEIGHT - 2}" x2="#{bar_x}" y2="#{bar_y + 2}" stroke="#{SCALE_BAR_COLOR}" stroke-width="1.5"/>
-<line x1="#{bar_x + scale_length}" y1="#{bar_y - SCALE_BAR_HEIGHT - 2}" x2="#{bar_x + scale_length}" y2="#{bar_y + 2}" stroke="#{SCALE_BAR_COLOR}" stroke-width="1.5"/>
-<text x="#{bar_x + scale_length / 2}" y="#{bar_y - SCALE_BAR_HEIGHT - 6}" fill="#{SCALE_BAR_COLOR}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle">1 foot</text>
+<rect x="#{bar_x}" y="#{bar_y - SCALE_BAR_HEIGHT_IN}" width="#{scale_length}" height="#{SCALE_BAR_HEIGHT_IN}" fill="#{SCALE_BAR_COLOR}"/>
+<line x1="#{bar_x}" y1="#{bar_y - SCALE_BAR_HEIGHT_IN - tick_height}" x2="#{bar_x}" y2="#{bar_y + tick_height}" stroke="#{SCALE_BAR_COLOR}" stroke-width="#{stroke_width}"/>
+<line x1="#{bar_x + scale_length}" y1="#{bar_y - SCALE_BAR_HEIGHT_IN - tick_height}" x2="#{bar_x + scale_length}" y2="#{bar_y + tick_height}" stroke="#{SCALE_BAR_COLOR}" stroke-width="#{stroke_width}"/>
+<text x="#{bar_x + scale_length / 2}" y="#{bar_y - SCALE_BAR_HEIGHT_IN - 0.3}" fill="#{SCALE_BAR_COLOR}" font-size="#{font_size}" font-family="Arial, sans-serif" text-anchor="middle">1 foot</text>
 </g>)
     end
 
     # Create overall dimension lines (width and height)
     dimension_lines = ""
     if SHOW_SCALE_BAR
-      # Get track bounding box from all points
-      all_x = analyzer.points.map { |p| p[0] }
-      all_y = analyzer.points.map { |p| p[1] }
-      track_min_x = all_x.min
-      track_max_x = all_x.max
-      track_min_y = all_y.min
-      track_max_y = all_y.max
-
-      track_width = track_max_x - track_min_x
-      track_height = track_max_y - track_min_y
-
-      # Convert to inches for display
-      width_inches = track_width / SVG_UNITS_PER_INCH
-      height_inches = track_height / SVG_UNITS_PER_INCH
+      # Use track bounds already calculated above
+      # Output coordinates are already in inches (1 unit = 1 inch)
+      width_inches = track_max_x - track_min_x
+      height_inches = track_max_y - track_min_y
 
       # Format as feet and inches
       def format_feet_inches(inches)
@@ -1421,25 +1426,27 @@ class SplitVisualizer
       height_label = format_feet_inches(height_inches)
 
       dim_color = SCALE_BAR_COLOR
-      dim_offset = 25.0  # Distance from track edge
-      tick_size = 6.0
+      dim_offset_in = 2.0   # Distance from track edge (inches)
+      tick_size_in = 0.5    # Tick mark size (inches)
+      stroke_width_in = 0.05
+      font_size_in = 0.8
 
       # Width dimension (below track)
-      w_y = track_max_y + dim_offset
+      w_y = track_max_y + dim_offset_in
       # Height dimension (right of track)
-      h_x = track_max_x + dim_offset
+      h_x = track_max_x + dim_offset_in
 
-      dimension_lines = %(<g id="dimensions" fill="#{dim_color}" stroke="#{dim_color}" stroke-width="1">
+      dimension_lines = %(<g id="dimensions" fill="#{dim_color}" stroke="#{dim_color}" stroke-width="#{stroke_width_in}">
 <!-- Width dimension -->
 <line x1="#{track_min_x}" y1="#{w_y}" x2="#{track_max_x}" y2="#{w_y}"/>
-<line x1="#{track_min_x}" y1="#{w_y - tick_size/2}" x2="#{track_min_x}" y2="#{w_y + tick_size/2}"/>
-<line x1="#{track_max_x}" y1="#{w_y - tick_size/2}" x2="#{track_max_x}" y2="#{w_y + tick_size/2}"/>
-<text x="#{(track_min_x + track_max_x) / 2}" y="#{w_y + 12}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle" stroke="none">#{width_label}</text>
+<line x1="#{track_min_x}" y1="#{w_y - tick_size_in/2}" x2="#{track_min_x}" y2="#{w_y + tick_size_in/2}"/>
+<line x1="#{track_max_x}" y1="#{w_y - tick_size_in/2}" x2="#{track_max_x}" y2="#{w_y + tick_size_in/2}"/>
+<text x="#{(track_min_x + track_max_x) / 2}" y="#{w_y + 1.0}" font-size="#{font_size_in}" font-family="Arial, sans-serif" text-anchor="middle" stroke="none">#{width_label}</text>
 <!-- Height dimension -->
 <line x1="#{h_x}" y1="#{track_min_y}" x2="#{h_x}" y2="#{track_max_y}"/>
-<line x1="#{h_x - tick_size/2}" y1="#{track_min_y}" x2="#{h_x + tick_size/2}" y2="#{track_min_y}"/>
-<line x1="#{h_x - tick_size/2}" y1="#{track_max_y}" x2="#{h_x + tick_size/2}" y2="#{track_max_y}"/>
-<text x="#{h_x + 8}" y="#{(track_min_y + track_max_y) / 2}" font-size="10" font-family="Arial, sans-serif" text-anchor="start" dominant-baseline="middle" stroke="none">#{height_label}</text>
+<line x1="#{h_x - tick_size_in/2}" y1="#{track_min_y}" x2="#{h_x + tick_size_in/2}" y2="#{track_min_y}"/>
+<line x1="#{h_x - tick_size_in/2}" y1="#{track_max_y}" x2="#{h_x + tick_size_in/2}" y2="#{track_max_y}"/>
+<text x="#{h_x + 0.5}" y="#{(track_min_y + track_max_y) / 2}" font-size="#{font_size_in}" font-family="Arial, sans-serif" text-anchor="start" dominant-baseline="middle" stroke="none">#{height_label}</text>
 </g>)
     end
 
