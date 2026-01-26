@@ -53,48 +53,30 @@ CHICANE_ANGLE_THRESHOLD = 60.0    # Degrees - direction change that indicates a 
 CHICANE_MIN_REVERSALS = 2         # Minimum direction reversals to qualify as chicane
 
 #===============================================================================
-# TRACK DIRECTION AND START/FINISH
+# MANUAL SPLIT CONFIGURATION
 #===============================================================================
-# Set the start/finish line and racing direction
-
-# t-value where split 1 (start/finish) should be located
-# Set to the t-value closest to where you want numbering to begin
-START_FINISH_T = 0.524    # Near current split 11
+# Define ALL splits manually as t-values (0.0 to 1.0 along the track path).
+# Split 1 is always at t=0 (start/finish line), so don't include it here.
+# List remaining splits in racing order.
 
 # Reverse the direction of numbering (true = clockwise on track)
 REVERSE_DIRECTION = true
 
-#===============================================================================
-# MANUAL SPLIT ADJUSTMENTS
-#===============================================================================
-# These let you tweak individual splits while keeping auto-generated ones.
-# Use the split numbers shown in the SVG output.
+# All splits after split 1, in racing direction order
+# Split 1 is automatically at START_FINISH_T (the start/finish line)
+START_FINISH_T = 0.515
 
-# Move a split to a new position (split_number => new_t_value)
-# Example: { 5 => 0.25 } moves split 5 to t=0.25
-MOVE_SPLITS = {
-  2 => 0.05,
-  # 12 => 0.70,
-}
-
-# Remove specific splits by number (they won't appear)
-# Example: [3, 8] removes splits 3 and 8
-REMOVE_SPLITS = [
-  # 20,  # Merge with split 1 (same location on closed loop)
-]
-
-# Add new splits at these t-values (0.0 to 1.0)
-# These will be inserted and numbered accordingly
-ADD_SPLITS = [
-  # 0.15,
-  # 0.85,
+MANUAL_SPLITS = [
+  0.47
+  # Add your split t-values here in racing order
+  # Example: 0.55, 0.60, 0.70, ... (continuing from split 1 in racing direction)
 ]
 
 # Visual settings for split preview
 SPLIT_LINE_COLOR = '#FF0000'
 SPLIT_LINE_WIDTH = 2.0
 SPLIT_LINE_LENGTH = 30.0          # Length of split indicator lines
-SVG_PADDING = 40.0                # White border padding around the SVG
+SVG_PADDING = 60.0                # White border padding around the SVG
 
 # Ghost track settings - shows original track for comparison
 SHOW_GHOST_TRACK = true           # Enable ghost track overlay
@@ -113,6 +95,12 @@ GRAIN_LINE_COLOR = '#5D3A1A'      # Dark brown for wood grain
 GRAIN_LINE_OPACITY = 0.7          # Darker opacity for grain lines
 GRAIN_LINE_SPACING = 3.0          # Spacing between grain lines (in SVG units)
 GRAIN_LINE_WIDTH = 0.8            # Width of grain lines
+
+# Scale bar settings
+SHOW_SCALE_BAR = true             # Show scale reference in lower left
+SVG_UNITS_PER_INCH = 25.4         # How many SVG units equal 1 inch (25.4 if 1 unit = 1mm)
+SCALE_BAR_COLOR = '#000000'       # Color of scale bar
+SCALE_BAR_HEIGHT = 4.0            # Height of the scale bar
 
 #===============================================================================
 # SVG PATH PARSER
@@ -859,78 +847,18 @@ class SplitVisualizer
     # Analyze the track
     analyzer = TrackAnalyzer.new(path_data)
 
-    # Start with auto-generated splits
-    splits = analyzer.split_points
-    puts "Auto-generated #{splits.length} splits"
+    # Build splits from manual configuration
+    # Split 1 is always at START_FINISH_T
+    splits = [START_FINISH_T]
 
-    # Apply manual adjustments
-    adjustments_made = []
-
-    # 1. Remove specified splits (by original number, 1-indexed)
-    if REMOVE_SPLITS.any?
-      # Remove in reverse order so indices stay valid
-      REMOVE_SPLITS.sort.reverse.each do |split_num|
-        idx = split_num - 1
-        if idx >= 0 && idx < splits.length
-          removed_t = splits.delete_at(idx)
-          adjustments_made << "Removed split #{split_num} (was t=#{removed_t.round(3)})"
-        end
-      end
+    if MANUAL_SPLITS.any?
+      # Add manual splits - they're already in racing order
+      splits += MANUAL_SPLITS
+      puts "Using #{splits.length} manually configured splits"
+    else
+      puts "WARNING: No manual splits configured. Only split 1 (start/finish) will be shown."
+      puts "Add t-values to MANUAL_SPLITS to define piece boundaries."
     end
-
-    # 2. Move specified splits (by original number, 1-indexed)
-    # Note: This uses original numbering before removes
-    if MOVE_SPLITS.any?
-      # We need to track original indices, so rebuild from auto-generated
-      original_splits = analyzer.split_points
-      MOVE_SPLITS.each do |split_num, new_t|
-        idx = split_num - 1
-        if idx >= 0 && idx < original_splits.length
-          old_t = original_splits[idx]
-          # Find and update in current splits array
-          current_idx = splits.index { |s| (s - old_t).abs < 0.001 }
-          if current_idx
-            splits[current_idx] = new_t
-            adjustments_made << "Moved split #{split_num}: t=#{old_t.round(3)} -> t=#{new_t.round(3)}"
-          end
-        end
-      end
-    end
-
-    # 3. Add new splits
-    if ADD_SPLITS.any?
-      ADD_SPLITS.each do |new_t|
-        splits << new_t
-        adjustments_made << "Added new split at t=#{new_t.round(3)}"
-      end
-    end
-
-    # Re-sort and remove duplicates
-    splits = splits.sort.uniq
-
-    if adjustments_made.any?
-      puts ""
-      puts "Manual adjustments applied:"
-      adjustments_made.each { |a| puts "  #{a}" }
-    end
-
-    # Reorder splits based on start/finish position and direction
-    # Find the split closest to START_FINISH_T
-    start_idx = splits.each_with_index.min_by { |t, _| (t - START_FINISH_T).abs }[1]
-
-    # Rotate array so start/finish is first
-    splits = splits.rotate(start_idx)
-
-    # Reverse direction if needed
-    if REVERSE_DIRECTION
-      # Keep first element (start/finish), reverse the rest
-      first = splits.shift
-      splits = [first] + splits.reverse
-    end
-
-    puts ""
-    puts "Track direction: #{REVERSE_DIRECTION ? 'REVERSED' : 'NORMAL'}"
-    puts "Start/finish at t=#{splits.first.round(3)}"
 
     puts ""
     puts "Track Analysis:"
@@ -964,26 +892,7 @@ class SplitVisualizer
       label_x = point[0] + perp[0] * label_offset
       label_y = point[1] + perp[1] * label_offset
 
-      # Calculate display coordinate (0.0 at split 1, increasing in racing direction)
-      start_t = splits[0]
-      if REVERSE_DIRECTION
-        # In reverse, distance increases as t decreases (with wrap-around)
-        if t <= start_t
-          display_t = start_t - t
-        else
-          display_t = start_t + (1.0 - t)
-        end
-      else
-        # In forward, distance increases as t increases (with wrap-around)
-        if t >= start_t
-          display_t = t - start_t
-        else
-          display_t = (1.0 - start_t) + t
-        end
-      end
-
-      # Format: "6 (0.25)" with bold number, non-bold parenthesis
-      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="8" font-family="Arial, sans-serif" text-anchor="middle" dominant-baseline="middle"><tspan font-weight="bold">#{split_num}</tspan> <tspan font-weight="normal">(#{display_t.round(2)})</tspan></text>)
+      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="8" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
 
       puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
     end
@@ -1103,6 +1012,66 @@ class SplitVisualizer
       grain_group = %(<g id="grain-direction">\n#{grain_groups.join("\n")}\n</g>)
     end
 
+    # Create scale bar in lower left corner
+    scale_bar = ""
+    if SHOW_SCALE_BAR
+      scale_length = SVG_UNITS_PER_INCH  # 1 inch in SVG units
+      margin = 15.0
+
+      # Position in lower left of padded viewbox
+      bar_x = viewbox[0] - SVG_PADDING + margin
+      bar_y = viewbox[1] + viewbox[3] + SVG_PADDING - margin
+
+      # Scale bar: horizontal line with end caps
+      scale_bar = %(<g id="scale-bar">
+<rect x="#{bar_x}" y="#{bar_y - SCALE_BAR_HEIGHT}" width="#{scale_length}" height="#{SCALE_BAR_HEIGHT}" fill="#{SCALE_BAR_COLOR}"/>
+<line x1="#{bar_x}" y1="#{bar_y - SCALE_BAR_HEIGHT - 2}" x2="#{bar_x}" y2="#{bar_y + 2}" stroke="#{SCALE_BAR_COLOR}" stroke-width="1.5"/>
+<line x1="#{bar_x + scale_length}" y1="#{bar_y - SCALE_BAR_HEIGHT - 2}" x2="#{bar_x + scale_length}" y2="#{bar_y + 2}" stroke="#{SCALE_BAR_COLOR}" stroke-width="1.5"/>
+<text x="#{bar_x + scale_length / 2}" y="#{bar_y - SCALE_BAR_HEIGHT - 6}" fill="#{SCALE_BAR_COLOR}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle">1 inch</text>
+</g>)
+    end
+
+    # Create overall dimension lines (width and height)
+    dimension_lines = ""
+    if SHOW_SCALE_BAR
+      # Get track bounding box from all points
+      all_x = analyzer.points.map { |p| p[0] }
+      all_y = analyzer.points.map { |p| p[1] }
+      track_min_x = all_x.min
+      track_max_x = all_x.max
+      track_min_y = all_y.min
+      track_max_y = all_y.max
+
+      track_width = track_max_x - track_min_x
+      track_height = track_max_y - track_min_y
+
+      # Convert to inches for display
+      width_inches = track_width / SVG_UNITS_PER_INCH
+      height_inches = track_height / SVG_UNITS_PER_INCH
+
+      dim_color = SCALE_BAR_COLOR
+      dim_offset = 25.0  # Distance from track edge
+      tick_size = 6.0
+
+      # Width dimension (below track)
+      w_y = track_max_y + dim_offset
+      # Height dimension (right of track)
+      h_x = track_max_x + dim_offset
+
+      dimension_lines = %(<g id="dimensions" fill="#{dim_color}" stroke="#{dim_color}" stroke-width="1">
+<!-- Width dimension -->
+<line x1="#{track_min_x}" y1="#{w_y}" x2="#{track_max_x}" y2="#{w_y}"/>
+<line x1="#{track_min_x}" y1="#{w_y - tick_size/2}" x2="#{track_min_x}" y2="#{w_y + tick_size/2}"/>
+<line x1="#{track_max_x}" y1="#{w_y - tick_size/2}" x2="#{track_max_x}" y2="#{w_y + tick_size/2}"/>
+<text x="#{(track_min_x + track_max_x) / 2}" y="#{w_y + 12}" font-size="10" font-family="Arial, sans-serif" text-anchor="middle" stroke="none">#{width_inches.round}"</text>
+<!-- Height dimension -->
+<line x1="#{h_x}" y1="#{track_min_y}" x2="#{h_x}" y2="#{track_max_y}"/>
+<line x1="#{h_x - tick_size/2}" y1="#{track_min_y}" x2="#{h_x + tick_size/2}" y2="#{track_min_y}"/>
+<line x1="#{h_x - tick_size/2}" y1="#{track_max_y}" x2="#{h_x + tick_size/2}" y2="#{track_max_y}"/>
+<text x="#{h_x + 8}" y="#{(track_min_y + track_max_y) / 2}" font-size="10" font-family="Arial, sans-serif" text-anchor="start" dominant-baseline="middle" stroke="none">#{height_inches.round}"</text>
+</g>)
+    end
+
     # Update SVG dimensions and viewBox
     modified_svg = svg_content.dup
     modified_svg = modified_svg.sub(/width="[^"]+"/, %(width="#{padded_width.round(2)}"))
@@ -1118,8 +1087,8 @@ class SplitVisualizer
     # Insert after opening <svg ...> tag (find the svg tag and insert after it)
     modified_svg = modified_svg.sub(/(<svg[^>]*>)/, "\\1\n#{insert_content}\n")
 
-    # Insert grain direction, split lines, and labels before closing </svg>
-    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{label_group}\n</svg>")
+    # Insert grain direction, split lines, labels, and scale bar before closing </svg>
+    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{label_group}\n#{scale_bar}\n#{dimension_lines}\n</svg>")
 
     File.write(@output_file, modified_svg)
 
