@@ -57,7 +57,7 @@ MIN_TURN_RADIUS_IN = 4.5
 COMFORTABLE_TURN_RADIUS_IN = 5.5
 
 # Maximum assembled track size (in inches)
-MAX_TRACK_DIMENSION_IN = 48.0     # 4 feet
+MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
 
 # Wood/CNC constraints (in inches)
 MAX_PIECE_LENGTH_IN = 11.12       # Max length of a single piece (for wood grain)
@@ -327,57 +327,143 @@ class PieceOverrideGenerator
     arc1[0..-2] + arc2
   end
 
+  # Store turn markers for visualization
+  @turn_markers = []
+
+  def self.turn_markers
+    @turn_markers
+  end
+
+  def self.clear_turn_markers
+    @turn_markers = []
+  end
+
   # Piece 3 override: Build chicane from scratch, turn by turn
-  # Turn 1: Sharp right
-  # Turn 2: Sharp left
-  # Turn 3: Gradual left (to exit)
+  # NOTE: original_points are in raw t-order, which is OPPOSITE to racing direction
+  # Racing direction: piece 2 → piece 3 → piece 4
+  # So we need to reverse: entry is from end_pt (piece 2 side), exit is to start_pt (piece 4 side)
   def self.generate_piece_3_override(original_points, start_pt, end_pt, entry_dir, exit_dir)
-    # Normalize entry and exit directions
-    entry_len = Math.sqrt(entry_dir[0]**2 + entry_dir[1]**2)
-    exit_len = Math.sqrt(exit_dir[0]**2 + exit_dir[1]**2)
-    entry_unit = [entry_dir[0] / entry_len, entry_dir[1] / entry_len]
-    exit_unit = [exit_dir[0] / exit_len, exit_dir[1] / exit_len]
+    # REVERSE for racing direction: entry is from piece 2 (end_pt), exit is to piece 4 (start_pt)
+    racing_entry_pt = end_pt
+    racing_exit_pt = start_pt
+    racing_entry_dir = [-exit_dir[0], -exit_dir[1]]  # Reverse the exit direction
+    racing_exit_dir = [-entry_dir[0], -entry_dir[1]]  # Reverse the entry direction
 
-    # === TURN 1: Sharp right ===
-    turn1_radius = 3.0    # inches
-    turn1_angle = 90      # degrees
+    # Normalize directions
+    entry_len = Math.sqrt(racing_entry_dir[0]**2 + racing_entry_dir[1]**2)
+    exit_len = Math.sqrt(racing_exit_dir[0]**2 + racing_exit_dir[1]**2)
+    entry_unit = [racing_entry_dir[0] / entry_len, racing_entry_dir[1] / entry_len]
+    exit_unit = [racing_exit_dir[0] / exit_len, racing_exit_dir[1] / exit_len]
 
-    # === TURN 2: Sharp left ===
-    turn2_radius = 3.0    # inches
-    turn2_angle = 90      # degrees
+    # Use racing direction start/end
+    start_pt = racing_entry_pt
+    end_pt = racing_exit_pt
 
-    # === TURN 3: Gradual left (to exit) ===
-    turn3_radius = 1.5    # inches
-    turn3_angle = 30      # degrees
+    # === STRAIGHT RUNS (distance to travel before each turn) ===
+    straight1 = 0.0       # inches before turn 1
+    straight2 = 0.0       # inches before turn 2
+    straight3 = 0.0       # inches before turn 3
 
-    # Build Turn 1
+    # === TURN 1 ===
+    turn1_radius = 2.5        # inches
+    turn1_angle = 110          # degrees
+    turn1_direction = :right  # :left or :right (in racing direction)
+
+    # === TURN 2 ===
+    turn2_radius = 2.5        # inches
+    turn2_angle = 140         # degrees
+    turn2_direction = :left   # :left or :right (in racing direction)
+
+    # === TURN 3 ===
+    turn3_radius = 4        # inches
+    turn3_angle = 60          # degrees
+    turn3_direction = :left   # :left or :right (in racing direction)
+
+    all_points = []
+    @turn_markers = []  # Clear previous markers
+
+    # Current position and direction
+    current_pt = start_pt
+    current_dir = entry_unit
+
+    # Straight run before Turn 1
+    if straight1 > 0
+      straight1_points = build_straight_run(current_pt, current_dir, straight1, 10)
+      all_points += straight1_points
+      current_pt = straight1_points.last
+    end
+
+    # Record Turn 1 start position
+    @turn_markers << { label: "T1", pt: current_pt.dup, dir: current_dir.dup }
+
+    # Build Turn 1 (flip direction since entry is reversed)
+    t1_actual = turn1_direction == :right ? :left : :right
     turn1_points = build_arc_from_tangent(
-      start_pt, entry_unit, turn1_radius, turn1_angle, :right, 40
+      current_pt, current_dir, turn1_radius, turn1_angle, t1_actual, 40
     )
-    turn1_end = turn1_points.last
-    turn1_end_dir = tangent_at_arc_end(entry_unit, turn1_angle, :right)
+    all_points += (all_points.empty? ? turn1_points : turn1_points[1..-1])
+    current_pt = turn1_points.last
+    current_dir = tangent_at_arc_end(current_dir, turn1_angle, t1_actual)
 
-    # Build Turn 2
+    # Straight run before Turn 2
+    if straight2 > 0
+      straight2_points = build_straight_run(current_pt, current_dir, straight2, 10)
+      all_points += straight2_points[1..-1]
+      current_pt = straight2_points.last
+    end
+
+    # Record Turn 2 start position
+    @turn_markers << { label: "T2", pt: current_pt.dup, dir: current_dir.dup }
+
+    # Build Turn 2 (flip direction since entry is reversed)
+    t2_actual = turn2_direction == :right ? :left : :right
     turn2_points = build_arc_from_tangent(
-      turn1_end, turn1_end_dir, turn2_radius, turn2_angle, :left, 50
+      current_pt, current_dir, turn2_radius, turn2_angle, t2_actual, 50
     )
-    turn2_end = turn2_points.last
-    turn2_end_dir = tangent_at_arc_end(turn1_end_dir, turn2_angle, :left)
+    all_points += turn2_points[1..-1]
+    current_pt = turn2_points.last
+    current_dir = tangent_at_arc_end(current_dir, turn2_angle, t2_actual)
 
-    # Build Turn 3
+    # Straight run before Turn 3
+    if straight3 > 0
+      straight3_points = build_straight_run(current_pt, current_dir, straight3, 10)
+      all_points += straight3_points[1..-1]
+      current_pt = straight3_points.last
+    end
+
+    # Record Turn 3 start position
+    @turn_markers << { label: "T3", pt: current_pt.dup, dir: current_dir.dup }
+
+    # Build Turn 3 (flip direction since entry is reversed)
+    t3_actual = turn3_direction == :right ? :left : :right
     turn3_points = build_arc_from_tangent(
-      turn2_end, turn2_end_dir, turn3_radius, turn3_angle, :left, 50
+      current_pt, current_dir, turn3_radius, turn3_angle, t3_actual, 50
     )
-    turn3_end = turn3_points.last
-    turn3_end_dir = tangent_at_arc_end(turn2_end_dir, turn3_angle, :left)
+    all_points += turn3_points[1..-1]
+    current_pt = turn3_points.last
+    current_dir = tangent_at_arc_end(current_dir, turn3_angle, t3_actual)
 
     # Smooth connector to end point
     connector_points = build_smooth_connector(
-      turn3_end, turn3_end_dir, end_pt, exit_unit, 30
+      current_pt, current_dir, end_pt, exit_unit, 30
     )
 
-    # Combine all segments
-    turn1_points + turn2_points[1..-1] + turn3_points[1..-1] + connector_points[1..-1]
+    # Add connector
+    all_points += connector_points[1..-1]
+
+    # IMPORTANT: Reverse the points to return in raw t-order (opposite of racing direction)
+    all_points.reverse
+  end
+
+  # Build a straight run from a point in a direction
+  def self.build_straight_run(start_pt, direction, distance, num_points)
+    points = []
+    num_points.times do |i|
+      t = i.to_f / (num_points - 1)
+      d = t * distance
+      points << [start_pt[0] + direction[0] * d, start_pt[1] + direction[1] * d]
+    end
+    points
   end
 
   # Build an arc starting at a point with given tangent direction
@@ -1943,15 +2029,38 @@ class SplitVisualizer
       warnings_group = %(<g id="tight-radius-warnings">\n#{tight_warnings.join("\n")}\n</g>)
     end
 
+    # Build turn markers group (for piece 3 chicane visualization)
+    turn_markers_group = ""
+    markers = PieceOverrideGenerator.turn_markers
+    if markers && markers.any?
+      marker_elements = markers.map do |m|
+        pt = m[:pt]
+        dir = m[:dir]
+        label = m[:label]
+        # Draw a small perpendicular hash mark
+        perp = [-dir[1], dir[0]]  # Perpendicular to direction
+        half_len = 0.4  # Half length of hash mark
+        x1 = pt[0] + perp[0] * half_len
+        y1 = pt[1] + perp[1] * half_len
+        x2 = pt[0] - perp[0] * half_len
+        y2 = pt[1] - perp[1] * half_len
+        # Orange color for turn markers - hash mark + label
+        line = %(<line x1="#{x1.round(2)}" y1="#{y1.round(2)}" x2="#{x2.round(2)}" y2="#{y2.round(2)}" stroke="#FF6600" stroke-width="0.08"/>)
+        text = %(<text x="#{(pt[0] + perp[0] * 0.7).round(2)}" y="#{(pt[1] + perp[1] * 0.7).round(2)}" fill="#FF6600" font-size="0.35" font-family="Arial" text-anchor="middle" dominant-baseline="middle">#{label}</text>)
+        line + "\n" + text
+      end
+      turn_markers_group = %(<g id="turn-markers">\n#{marker_elements.join("\n")}\n</g>)
+    end
+
     # Build test cars group - only if enabled
     test_cars_group = ""
     if SHOW_TEST_CARS && test_car_elements.any?
       test_cars_group = %(<g id="test-cars">\n#{test_car_elements.join("\n")}\n</g>)
     end
 
-    # Insert grain direction, split lines, labels, scale bar, warnings, and test cars before closing </svg>
+    # Insert grain direction, split lines, labels, scale bar, warnings, turn markers, and test cars before closing </svg>
     # Order matters for SVG layering - later elements render on top
-    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{test_cars_group}\n#{scale_bar}\n#{dimension_lines}\n#{warnings_group}\n#{label_group}\n</svg>")
+    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{test_cars_group}\n#{scale_bar}\n#{dimension_lines}\n#{warnings_group}\n#{turn_markers_group}\n#{label_group}\n</svg>")
 
     File.write(@output_file, modified_svg)
 
