@@ -57,7 +57,7 @@ MIN_TURN_RADIUS_IN = 4.5
 COMFORTABLE_TURN_RADIUS_IN = 5.5
 
 # Maximum assembled track size (in inches)
-MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
+MAX_TRACK_DIMENSION_IN = 48.0     # 4 feet
 
 # Wood/CNC constraints (in inches)
 MAX_PIECE_LENGTH_IN = 11.12       # Max length of a single piece (for wood grain)
@@ -139,7 +139,7 @@ EDIT_PATH_WIDTH_IN = 0.5         # Thicker line for visibility
 EDIT_PATH_OPACITY = 0.3          # Full opacity for editing
 
 # Rendering toggles - disable to focus on path editing
-SHOW_SIDEWALLS = false            # Render the U-shaped track profile
+SHOW_SIDEWALLS = true            # Render the U-shaped track profile
 SHOW_TEST_CARS = false            # Render test car visualizations
 SHOW_WOOD_GRAIN = false           # Render grain direction lines
 
