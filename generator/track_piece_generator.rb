@@ -377,7 +377,7 @@ class PieceOverrideGenerator
     turn2_direction = :left   # :left or :right (in racing direction)
 
     # === TURN 3 ===
-    turn3_radius = 4        # inches
+    turn3_radius = 2.5        # inches
     turn3_angle = 60          # degrees
     turn3_direction = :left   # :left or :right (in racing direction)
 
@@ -1726,38 +1726,9 @@ class SplitVisualizer
       puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
     end
 
-    # Generate piece labels at the center of each piece (between two splits)
-    # Work in normalized coordinates where t=0.0 is split 1 and increases around the lap
+    # Piece labels will be generated later after piece_data is available
+    # (so labels align with the blue edit path for overridden pieces)
     piece_labels = []
-    label_font_size_in = 0.8
-    label_stroke_width_in = 0.25
-    label_color = '#555555'
-
-    splits_normalized.each_with_index do |norm_start, i|
-      # Next split in normalized coords (wraps to 1.0 for the last piece)
-      norm_end = if i + 1 < splits_normalized.length
-        splits_normalized[i + 1]
-      else
-        1.0  # Last piece goes from final split back to start (t=1.0 same as t=0.0)
-      end
-
-      piece_num = i + 1
-
-      # Calculate midpoint in normalized space (simple average, no wrap issues)
-      midpoint_norm = (norm_start + norm_end) / 2.0
-
-      # Convert to raw t-value for point lookup
-      midpoint_t = normalized_to_raw.call(midpoint_norm)
-
-      # Get the point at the midpoint of the piece
-      mid_point = analyzer.point_at(midpoint_t)
-      label_x = mid_point[0]
-      label_y = mid_point[1]
-
-      # Text with white outline/stroke behind it for readability
-      piece_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="#{label_stroke_width_in}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="middle">#{piece_num}</text>)
-      piece_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{label_color}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="middle">#{piece_num}</text>)
-    end
 
     # Generate test car visualizations anywhere on track
     # Uses normalized coordinates where t=0.0 is at split 1 (START_FINISH_T)
@@ -1922,7 +1893,6 @@ class SplitVisualizer
       grid_rect = %(<rect x="#{viewbox_x}" y="#{viewbox_y}" width="#{viewbox_width}" height="#{viewbox_height}" fill="url(#background-grid)"/>)
     end
     split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
-    label_group = %(<g id="piece-labels">\n#{piece_labels.join("\n")}\n</g>)
 
     # Create ghost track if enabled - shows ORIGINAL track layout scaled to match output
     # This lets you compare the original curves vs simplified output at the same size
@@ -2016,6 +1986,37 @@ class SplitVisualizer
     if SHOW_WOOD_GRAIN && grain_groups.any?
       grain_group = %(<g id="grain-direction">\n#{grain_groups.join("\n")}\n</g>)
     end
+
+    # Generate piece labels at the center of each piece
+    # Uses piece_data to get actual points (including overridden geometry)
+    # Group by piece_num first (wrap-around pieces like 6 may have multiple segments)
+    label_font_size_in = 0.8
+    label_stroke_width_in = 0.25
+    label_color = '#555555'
+
+    # Group all points by piece number
+    points_by_piece = {}
+    piece_data.each do |pd|
+      piece_num = pd[:piece_num]
+      points_by_piece[piece_num] ||= []
+      points_by_piece[piece_num] += pd[:points]
+    end
+
+    # Generate one label per piece
+    points_by_piece.each do |piece_num, points|
+      # Find the center point of this piece using centroid (average of all points)
+      # This works well for wrap-around pieces and curved pieces alike
+      sum_x = points.sum { |pt| pt[0] }
+      sum_y = points.sum { |pt| pt[1] }
+      label_x = sum_x / points.length
+      label_y = sum_y / points.length
+
+      # Text with white outline/stroke behind it for readability
+      piece_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="#{label_stroke_width_in}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="middle">#{piece_num}</text>)
+      piece_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{label_color}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="middle">#{piece_num}</text>)
+    end
+
+    label_group = %(<g id="piece-labels">\n#{piece_labels.join("\n")}\n</g>)
 
     # Create scale bar in lower left corner
     scale_bar = ""
