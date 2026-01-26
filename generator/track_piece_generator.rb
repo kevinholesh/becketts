@@ -32,18 +32,18 @@ LEGO_CAR_HEIGHT_IN = 0.996
 TRACK_WIDTH_IN = 1.6     # Lane width - enough clearance for the car
 WALL_HEIGHT_IN = 0.3     # Side wall height to keep cars on track
 
-# Turning constraints (in mm)
+# Turning constraints (in inches)
 # Minimum radius should be at least 1.5x car length for smooth turns
-MIN_TURN_RADIUS_MM = 120.0        # Tight chicane minimum
-COMFORTABLE_TURN_RADIUS_MM = 180.0 # Comfortable cornering
+MIN_TURN_RADIUS_IN = 4.72         # Tight chicane minimum
+COMFORTABLE_TURN_RADIUS_IN = 7.09 # Comfortable cornering
 
-# Maximum assembled track size (in mm)
-MAX_TRACK_DIMENSION_MM = 1524.0   # 5 feet = 60 inches = 1524mm
+# Maximum assembled track size (in inches)
+MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
 
-# Wood/CNC constraints (in mm)
-MAX_PIECE_LENGTH_MM = 300.0       # Max length of a single piece (for wood grain)
-MIN_PIECE_LENGTH_MM = 100.0       # Min length to be practical
-WOOD_THICKNESS_MM = 19.0          # 3/4 inch walnut
+# Wood/CNC constraints (in inches)
+MAX_PIECE_LENGTH_IN = 11.81       # Max length of a single piece (for wood grain)
+MIN_PIECE_LENGTH_IN = 3.94        # Min length to be practical
+WOOD_THICKNESS_IN = 0.75          # 3/4 inch walnut
 
 # Track simplification
 SIMPLIFY_STRAIGHTS = true         # Combine short straights into longer pieces
@@ -92,10 +92,7 @@ MANUAL_SPLITS = [
   0.91,
   0.77,
   0.71,
-
-
   0.625
-
 ]
 
 # Visual settings for split preview
@@ -125,9 +122,9 @@ GRAIN_LINE_WIDTH = 0.8            # Width of grain lines
 
 # Scale bar settings
 SHOW_SCALE_BAR = true             # Show scale reference in lower left
-# SVG stroke-width 7.5 = 70mm track width = 2.756 inches
+# SVG stroke-width 7.5 = 2.756 inch track width
 # So 1 inch = 7.5 / 2.756 = 2.72 SVG units
-SVG_UNITS_PER_INCH = 2.72         # Calibrated: SVG stroke 7.5 = 70mm track
+SVG_UNITS_PER_INCH = 2.72         # Calibrated: SVG stroke 7.5 = 2.756" track
 SCALE_BAR_COLOR = '#000000'       # Color of scale bar
 SCALE_BAR_HEIGHT = 4.0            # Height of the scale bar
 
