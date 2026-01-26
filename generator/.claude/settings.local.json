@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ruby track_piece_generator.rb:*)"
+      "Bash(ruby track_piece_generator.rb:*)",
+      "Bash(cursor:*)",
+      "Bash(ruby -e:*)"
     ]
   }
 }

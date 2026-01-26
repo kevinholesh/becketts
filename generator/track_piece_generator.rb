@@ -1,861 +1,685 @@
 #!/usr/bin/env ruby
 
-
-
-
-# Original prompt to claude
-# I want to generate the SVG shape of each piece of the track. When assembled, it will resemble a mostly accurate but simplified version of the Silverstone circuit F1 track. I want to optimize for wood grain as long grain as much as I can. I’ll be cutting these out of a CNc machine in walnut. Eventually, I want to write a Ruby script to take a folder full of race track SVGs and generate all of the pieces for each track, finding common pieces to make between them and simplifying some of the curves to make them reusable between different tracks. At least one piece for each track should be totally custom based on the most famous curve on the race track (like Becketts for Silverstone). 
-# For now, let’s just start simpler though and just do Silverstone. Help me through how to divide up the track into pieces, how many pieces I’d need to manufacturer. I’m going to be using Hot Wheels Premium F1 cars as the toy on the track, so keep that in mind with the turning radius and minimum “chicane” type diameter. I think that will determine the size of the rest of the track.
-# Single lane. I’d prefer to keep it as small as possible. Yes they will connect, similar to a Brio connection with a thin part and a circle as the positive, then a “keyhole” type negative section of the next piece.
-# How big would the track have to be? I think max is like it to be 5 feet across in the largest dimension at the very very most. I’m okay not keeping 1:1 scaling between the curves and the straights. I want to simplify and “charactureize” the track circuit to make it easier and cheaper to manufacture.
-
-
-
-
-
-
-# frozen_string_literal: true
-
-# Track Piece Generator
-# Converts race track SVG centerlines into modular wooden track pieces
-# for Hot Wheels Premium F1 cars with Brio-style connectors
-#
-# Usage: ruby track_piece_generator.rb input.svg
-#
-# Edit the CONFIGURATION section below to adjust parameters
-
-require 'fileutils'
-require 'json'
-require 'time'
+# Silverstone F1 Track Piece Generator
+# Generates SVG pieces for CNC cutting from walnut wood
+# Optimized for Hot Wheels Premium F1 cars
 
 #===============================================================================
-# CONFIGURATION - Edit these values to customize your track
+# CONFIGURATION
 #===============================================================================
 
+# Input/Output files
+INPUT_FILE = 'silverstone.svg'
+OUTPUT_FILE = 'silverstone-split.svg'
 
-print 'Generating track pieces for Silverstone...'
+# Hot Wheels Premium F1 car dimensions (in mm)
+CAR_LENGTH_MM = 76.0      # ~3 inches
+CAR_WIDTH_MM = 32.0       # ~1.25 inches
+CAR_HEIGHT_MM = 20.0      # ~0.8 inches
 
+# Track dimensions (in mm)
+TRACK_WIDTH_MM = 50.0     # Lane width - enough clearance for the car
+WALL_HEIGHT_MM = 10.0     # Side wall height to keep cars on track
 
+# Turning constraints (in mm)
+# Minimum radius should be at least 1.5x car length for smooth turns
+MIN_TURN_RADIUS_MM = 120.0        # Tight chicane minimum
+COMFORTABLE_TURN_RADIUS_MM = 180.0 # Comfortable cornering
 
-# Track constraints
-MIN_RADIUS_MM = 200              # Minimum curve radius - 200mm for Hot Wheels Premium F1
-MAX_PIECE_LENGTH_MM = 350        # Maximum length of a single piece
-MIN_PIECE_LENGTH_MM = 80         # Minimum length before pieces get merged
-MAX_TOTAL_WIDTH_MM = 1200        # Maximum overall track width (~47")
-MAX_TOTAL_HEIGHT_MM = 800        # Maximum overall track height (~31")
+# Maximum assembled track size (in mm)
+MAX_TRACK_DIMENSION_MM = 1524.0   # 5 feet = 60 inches = 1524mm
 
-# Caricature level: 0.0 = detailed, 1.0 = very simplified
-# Higher values reduce piece count but lose detail
-SIMPLIFICATION_LEVEL = 0.4
+# Wood/CNC constraints (in mm)
+MAX_PIECE_LENGTH_MM = 300.0       # Max length of a single piece (for wood grain)
+MIN_PIECE_LENGTH_MM = 100.0       # Min length to be practical
+WOOD_THICKNESS_MM = 19.0          # 3/4 inch walnut
 
-# Curvature detection threshold
-# Lower = more sensitive (detects gentler curves as curves)
-# Higher = less sensitive (only tight curves detected, more straights)
-CURVATURE_THRESHOLD = 0.003
+# Track simplification
+SIMPLIFY_STRAIGHTS = true         # Combine short straights into longer pieces
+SIMPLIFY_THRESHOLD_DEG = 10.0     # Angle threshold for "straight" detection
 
-# Track piece dimensions (mm)
-TRACK_WIDTH_MM = 40              # Width of track surface
-WALL_HEIGHT_MM = 12              # Height of side walls
-GROOVE_WIDTH_MM = 10             # Width of center groove for wheels
-GROOVE_DEPTH_MM = 3              # Depth of center groove
+# Split point configuration
+MIN_SPLIT_SPACING = 0.05          # Minimum spacing between splits (as fraction of path)
+CURVATURE_THRESHOLD = 0.15        # Threshold for detecting significant curves
 
-# Brio-style connector dimensions (mm)
-CONNECTOR_PEG_DIAMETER_MM = 12   # Male connector peg diameter
-CONNECTOR_HOLE_DIAMETER_MM = 15  # Female connector hole diameter (larger for play)
-CONNECTOR_STEM_LENGTH_MM = 10    # Length of connector stem
+# Chicane protection - keep tight S-curves as single pieces
+CHICANE_PROTECTION = true         # Enable chicane detection
+CHICANE_ANGLE_THRESHOLD = 60.0    # Degrees - direction change that indicates a chicane
+CHICANE_MIN_REVERSALS = 2         # Minimum direction reversals to qualify as chicane
 
+# Special named pieces - these sections will NOT be split
+# Each entry: { name: "Name", t_start: 0.0, t_end: 1.0 }
+# Use the track analysis output to find t-values for corners
+SPECIAL_PIECES = [
+  { name: "Maggots-Becketts-Chapel", t_start: 0.27, t_end: 0.42 },
+  # Add more special pieces here, e.g.:
+  # { name: "Club Corner", t_start: 0.52, t_end: 0.62 },
+]
 
+# Visual settings for split preview
+SPLIT_LINE_COLOR = '#FF0000'
+SPLIT_LINE_WIDTH = 2.0
+SPLIT_LINE_LENGTH = 30.0          # Length of split indicator lines
+SVG_PADDING = 40.0                # White border padding around the SVG
 
+#===============================================================================
+# SVG PATH PARSER
+#===============================================================================
 
-class Vector2D
-  attr_accessor :x, :y
+class PathParser
+  attr_reader :commands
 
-  def initialize(x, y)
-    @x = x.to_f
-    @y = y.to_f
+  def initialize(path_data)
+    @path_data = path_data
+    @commands = []
+    parse
   end
 
-  def +(other) = Vector2D.new(@x + other.x, @y + other.y)
-  def -(other) = Vector2D.new(@x - other.x, @y - other.y)
-  def *(scalar) = Vector2D.new(@x * scalar, @y * scalar)
-  def /(scalar) = Vector2D.new(@x / scalar, @y / scalar)
-  def dot(other) = @x * other.x + @y * other.y
-  def cross(other) = @x * other.y - @y * other.x
-  def magnitude = Math.sqrt(@x * @x + @y * @y)
-  def normalize
-    mag = magnitude
-    return Vector2D.new(0, 0) if mag.zero?
-    self / mag
-  end
-  def perpendicular = Vector2D.new(-@y, @x)
-  def angle = Math.atan2(@y, @x)
-  def distance_to(other) = (self - other).magnitude
-  def to_s = "(#{@x.round(2)}, #{@y.round(2)})"
-end
-
-class TrackPoint
-  attr_accessor :position, :tangent, :curvature, :arc_length
-
-  def initialize(position, tangent = nil, curvature = 0, arc_length = 0)
-    @position = position
-    @tangent = tangent || Vector2D.new(1, 0)
-    @curvature = curvature
-    @arc_length = arc_length
-  end
-end
-
-class TrackPiece
-  attr_accessor :id, :name, :piece_type, :points, :start_angle, :end_angle,
-                :arc_length, :radius, :sweep_angle, :is_signature
-
-  def initialize(id)
-    @id = id
-    @name = "Piece_#{id}"
-    @piece_type = :straight
-    @points = []
-    @start_angle = 0
-    @end_angle = 0
-    @arc_length = 0
-    @radius = Float::INFINITY
-    @sweep_angle = 0
-    @is_signature = false
-  end
-
-  def start_point = @points.first&.position
-  def end_point = @points.last&.position
-  def start_tangent = @points.first&.tangent || Vector2D.new(1, 0)
-  def end_tangent = @points.last&.tangent || Vector2D.new(1, 0)
-
-  def direction
-    return :straight if @piece_type == :straight
-    return :straight unless @points.length >= 2
-    cross = start_tangent.cross(end_tangent)
-    cross > 0 ? :left : :right
-  end
-
-  def to_inventory_entry
-    {
-      id: @id,
-      name: @name,
-      type: @piece_type == :straight ? "Straight" : "Curve #{direction.to_s.capitalize}",
-      arc_length: @arc_length.round(1),
-      radius: @radius.finite? ? @radius.round(1) : nil,
-      sweep_angle_deg: (@sweep_angle * 180 / Math::PI).round(1),
-      is_signature: @is_signature
-    }
-  end
-end
-
-class SVGPathParser
-  COMMANDS = /([MmZzLlHhVvCcSsQqTtAa])/
-
-  def initialize(path_string)
-    @path_string = path_string.strip
-    @points = []
-    @current_pos = Vector2D.new(0, 0)
-  end
+  private
 
   def parse
-    return @points unless @points.empty?
-    tokens = tokenize(@path_string)
-    i = 0
-    while i < tokens.length
-      cmd = tokens[i]
-      i += 1
-      args, i = extract_args(tokens, i)
-      process_command(cmd, args)
-    end
-    @points
-  end
-
-  private
-
-  def tokenize(path_string)
+    # Tokenize the path data - handle compact SVG number notation
+    # Numbers can be separated by spaces, commas, or just by the start of a new number (-)
+    # Also handles scientific notation like 1.5e-10
     tokens = []
-    path_string.split(COMMANDS).each do |part|
-      part = part.strip
-      next if part.empty?
-      if part.match?(COMMANDS)
-        tokens << part
+
+    @path_data.scan(/([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/i) do |cmd, num|
+      if cmd
+        tokens << cmd
+      elsif num
+        tokens << num.to_f
+      end
+    end
+
+    current_command = nil
+    current_args = []
+
+    tokens.each do |token|
+      if token.is_a?(String) && token =~ /[MmLlHhVvCcSsQqTtAaZz]/
+        # Save previous command if exists
+        if current_command
+          @commands << { type: current_command, args: current_args }
+        end
+        current_command = token
+        current_args = []
       else
-        tokens.concat(part.scan(/-?[\d.]+(?:e-?\d+)?/i))
+        current_args << token.to_f
       end
     end
-    tokens
-  end
 
-  def extract_args(tokens, start_idx)
-    args = []
-    idx = start_idx
-    while idx < tokens.length && !tokens[idx].match?(COMMANDS)
-      args << tokens[idx].to_f
-      idx += 1
-    end
-    [args, idx]
-  end
-
-  def process_command(cmd, args)
-    relative = cmd == cmd.downcase
-    case cmd.upcase
-    when 'M' then move_to(args, relative)
-    when 'L' then line_to(args, relative)
-    when 'H' then horizontal_to(args, relative)
-    when 'V' then vertical_to(args, relative)
-    when 'C' then cubic_bezier(args, relative)
-    when 'S' then smooth_cubic(args, relative)
-    when 'Q' then quadratic_bezier(args, relative)
-    when 'A' then arc_to(args, relative)
-    when 'Z' then close_path
-    end
-  end
-
-  def move_to(args, relative)
-    args.each_slice(2) do |x, y|
-      @current_pos = relative ? @current_pos + Vector2D.new(x, y) : Vector2D.new(x, y)
-      @points << @current_pos
-    end
-  end
-
-  def line_to(args, relative)
-    args.each_slice(2) do |x, y|
-      target = relative ? @current_pos + Vector2D.new(x, y) : Vector2D.new(x, y)
-      interpolate_line(@current_pos, target)
-      @current_pos = target
-    end
-  end
-
-  def horizontal_to(args, relative)
-    args.each do |x|
-      target = Vector2D.new(relative ? @current_pos.x + x : x, @current_pos.y)
-      interpolate_line(@current_pos, target)
-      @current_pos = target
-    end
-  end
-
-  def vertical_to(args, relative)
-    args.each do |y|
-      target = Vector2D.new(@current_pos.x, relative ? @current_pos.y + y : y)
-      interpolate_line(@current_pos, target)
-      @current_pos = target
-    end
-  end
-
-  def cubic_bezier(args, relative)
-    args.each_slice(6) do |x1, y1, x2, y2, x, y|
-      if relative
-        p1, p2, p3 = [@current_pos + Vector2D.new(x1, y1), 
-                      @current_pos + Vector2D.new(x2, y2), 
-                      @current_pos + Vector2D.new(x, y)]
-      else
-        p1, p2, p3 = [Vector2D.new(x1, y1), Vector2D.new(x2, y2), Vector2D.new(x, y)]
-      end
-      interpolate_cubic(@current_pos, p1, p2, p3)
-      @current_pos = p3
-    end
-  end
-
-  def smooth_cubic(args, relative)
-    args.each_slice(4) do |x2, y2, x, y|
-      p1 = @current_pos
-      p2, p3 = relative ? [@current_pos + Vector2D.new(x2, y2), @current_pos + Vector2D.new(x, y)] : 
-                          [Vector2D.new(x2, y2), Vector2D.new(x, y)]
-      interpolate_cubic(@current_pos, p1, p2, p3)
-      @current_pos = p3
-    end
-  end
-
-  def quadratic_bezier(args, relative)
-    args.each_slice(4) do |x1, y1, x, y|
-      p1, p2 = relative ? [@current_pos + Vector2D.new(x1, y1), @current_pos + Vector2D.new(x, y)] :
-                          [Vector2D.new(x1, y1), Vector2D.new(x, y)]
-      interpolate_quadratic(@current_pos, p1, p2)
-      @current_pos = p2
-    end
-  end
-
-  def arc_to(args, relative)
-    args.each_slice(7) do |rx, ry, rotation, large_arc, sweep, x, y|
-      target = relative ? @current_pos + Vector2D.new(x, y) : Vector2D.new(x, y)
-      interpolate_line(@current_pos, target, 20)
-      @current_pos = target
-    end
-  end
-
-  def close_path
-    return if @points.empty?
-    interpolate_line(@current_pos, @points.first) if @current_pos.distance_to(@points.first) > 0.1
-    @current_pos = @points.first
-  end
-
-  def interpolate_line(p0, p1, samples = 10)
-    (1..samples).each do |i|
-      t = i.to_f / samples
-      @points << p0 * (1 - t) + p1 * t
-    end
-  end
-
-  def interpolate_cubic(p0, p1, p2, p3, samples = 20)
-    (1..samples).each do |i|
-      t = i.to_f / samples
-      mt = 1 - t
-      x = mt**3 * p0.x + 3 * mt**2 * t * p1.x + 3 * mt * t**2 * p2.x + t**3 * p3.x
-      y = mt**3 * p0.y + 3 * mt**2 * t * p1.y + 3 * mt * t**2 * p2.y + t**3 * p3.y
-      @points << Vector2D.new(x, y)
-    end
-  end
-
-  def interpolate_quadratic(p0, p1, p2, samples = 15)
-    (1..samples).each do |i|
-      t = i.to_f / samples
-      mt = 1 - t
-      x = mt**2 * p0.x + 2 * mt * t * p1.x + t**2 * p2.x
-      y = mt**2 * p0.y + 2 * mt * t * p1.y + t**2 * p2.y
-      @points << Vector2D.new(x, y)
+    # Save last command
+    if current_command
+      @commands << { type: current_command, args: current_args }
     end
   end
 end
 
-class PathSimplifier
-  def initialize(points, tolerance)
-    @points = points
-    @tolerance = tolerance
+#===============================================================================
+# BEZIER CURVE UTILITIES
+#===============================================================================
+
+class BezierCurve
+  # Evaluate cubic bezier at parameter t (0..1)
+  def self.cubic_point(p0, p1, p2, p3, t)
+    mt = 1 - t
+    mt2 = mt * mt
+    mt3 = mt2 * mt
+    t2 = t * t
+    t3 = t2 * t
+
+    x = mt3 * p0[0] + 3 * mt2 * t * p1[0] + 3 * mt * t2 * p2[0] + t3 * p3[0]
+    y = mt3 * p0[1] + 3 * mt2 * t * p1[1] + 3 * mt * t2 * p2[1] + t3 * p3[1]
+    [x, y]
   end
 
-  def simplify
-    return @points if @points.length < 3
-    douglas_peucker(@points, @tolerance)
+  # Evaluate cubic bezier derivative at parameter t
+  def self.cubic_derivative(p0, p1, p2, p3, t)
+    mt = 1 - t
+    mt2 = mt * mt
+    t2 = t * t
+
+    dx = 3 * mt2 * (p1[0] - p0[0]) + 6 * mt * t * (p2[0] - p1[0]) + 3 * t2 * (p3[0] - p2[0])
+    dy = 3 * mt2 * (p1[1] - p0[1]) + 6 * mt * t * (p2[1] - p1[1]) + 3 * t2 * (p3[1] - p2[1])
+    [dx, dy]
   end
 
-  private
+  # Calculate curvature at parameter t
+  def self.cubic_curvature(p0, p1, p2, p3, t)
+    d1 = cubic_derivative(p0, p1, p2, p3, t)
 
-  def douglas_peucker(points, epsilon)
-    return points if points.length < 3
+    # Second derivative
+    mt = 1 - t
+    d2x = 6 * mt * (p2[0] - 2*p1[0] + p0[0]) + 6 * t * (p3[0] - 2*p2[0] + p1[0])
+    d2y = 6 * mt * (p2[1] - 2*p1[1] + p0[1]) + 6 * t * (p3[1] - 2*p2[1] + p1[1])
 
-    max_dist, max_idx = 0, 0
-    (1...points.length - 1).each do |i|
-      dist = perpendicular_distance(points[i], points.first, points.last)
-      max_dist, max_idx = dist, i if dist > max_dist
-    end
+    # Curvature = |x'y'' - y'x''| / (x'^2 + y'^2)^(3/2)
+    numerator = (d1[0] * d2y - d1[1] * d2x).abs
+    denominator = (d1[0]**2 + d1[1]**2) ** 1.5
 
-    if max_dist > epsilon
-      left = douglas_peucker(points[0..max_idx], epsilon)
-      right = douglas_peucker(points[max_idx..-1], epsilon)
-      left[0..-2] + right
-    else
-      [points.first, points.last]
-    end
-  end
-
-  def perpendicular_distance(point, line_start, line_end)
-    line_vec = line_end - line_start
-    point_vec = point - line_start
-    line_len = line_vec.magnitude
-    return point_vec.magnitude if line_len.zero?
-    t = [0, [1, point_vec.dot(line_vec) / (line_len * line_len)].min].max
-    (point - (line_start + line_vec * t)).magnitude
-  end
-end
-
-class CurvatureAnalyzer
-  def initialize(points)
-    @points = points
-  end
-
-  def analyze
-    return [] if @points.length < 3
-    track_points = []
-    arc_length = 0
-
-    @points.each_with_index do |pos, i|
-      arc_length += pos.distance_to(@points[i - 1]) if i > 0
-      tangent = calculate_tangent(i)
-      curvature = calculate_curvature(i)
-      track_points << TrackPoint.new(pos, tangent, curvature, arc_length)
-    end
-    track_points
-  end
-
-  private
-
-  def calculate_tangent(idx)
-    return (@points[1] - @points[0]).normalize if idx == 0 && @points.length > 1
-    return (@points[-1] - @points[-2]).normalize if idx == @points.length - 1 && @points.length > 1
-    return Vector2D.new(1, 0) if @points.length <= 1
-    ((@points[idx + 1] - @points[idx - 1]) / 2).normalize
-  end
-
-  def calculate_curvature(idx)
-    return 0 if idx < 1 || idx >= @points.length - 1
-    p0, p1, p2 = @points[idx - 1], @points[idx], @points[idx + 1]
-    a, b, c = p0.distance_to(p1), p1.distance_to(p2), p2.distance_to(p0)
-    return 0 if [a, b, c].any? { |d| d < 0.001 }
-    area = ((p1 - p0).cross(p2 - p0)) / 2
-    (4 * area) / (a * b * c)
+    denominator > 0.0001 ? numerator / denominator : 0
   end
 end
 
-class TrackSegmenter
-  def initialize(track_points)
-    @track_points = track_points
+#===============================================================================
+# TRACK ANALYZER
+#===============================================================================
+
+class TrackAnalyzer
+  attr_reader :points, :curvatures, :path_length
+
+  def initialize(path_data, samples_per_curve: 50)
+    @path_data = path_data
+    @samples_per_curve = samples_per_curve
+    @points = []
+    @curvatures = []
+    @tangents = []
+    analyze
   end
 
-  def segment
-    return [] if @track_points.empty?
+  def split_points
+    # Find points where we should split the track based on direction changes
+    splits = []
 
-    pieces = []
-    current_piece = TrackPiece.new(1)
-    current_piece.points << @track_points.first
+    # Always split at start
+    splits << 0.0
 
-    @track_points.each_cons(2).with_index do |(prev_point, curr_point), idx|
-      current_piece.points << curr_point
-      piece_length = curr_point.arc_length - current_piece.points.first.arc_length
+    # Calculate cumulative angle changes to detect significant direction shifts
+    # We look for points where the direction has changed significantly
+    angle_threshold = SIMPLIFY_THRESHOLD_DEG * Math::PI / 180.0  # Convert to radians
 
-      should_split = piece_length >= MAX_PIECE_LENGTH_MM
+    # Method 1: Track cumulative direction changes
+    cumulative_angle = 0.0
+    last_split_index = 0
 
-      if idx > 0 && !should_split && piece_length >= MIN_PIECE_LENGTH_MM
-        prev_straight = prev_point.curvature.abs < CURVATURE_THRESHOLD
-        curr_straight = curr_point.curvature.abs < CURVATURE_THRESHOLD
-        should_split = prev_straight != curr_straight
-      end
+    (1...@tangents.length).each do |i|
+      prev_t = @tangents[i-1]
+      curr_t = @tangents[i]
 
-      if idx > 0 && !should_split && piece_length >= MIN_PIECE_LENGTH_MM
-        should_split = prev_point.curvature * curr_point.curvature < 0 &&
-                       [prev_point, curr_point].all? { |p| p.curvature.abs > CURVATURE_THRESHOLD }
-      end
+      # Calculate angle between consecutive tangents
+      dot = prev_t[0] * curr_t[0] + prev_t[1] * curr_t[1]
+      dot = [[dot, -1.0].max, 1.0].min  # Clamp for numerical stability
+      angle = Math.acos(dot)
 
-      if should_split
-        finalize_piece(current_piece)
-        pieces << current_piece
-        current_piece = TrackPiece.new(pieces.length + 1)
-        current_piece.points << curr_point
-      end
-    end
+      # Determine direction (left or right turn) using cross product
+      cross = prev_t[0] * curr_t[1] - prev_t[1] * curr_t[0]
+      signed_angle = cross >= 0 ? angle : -angle
 
-    finalize_piece(current_piece) if current_piece.points.length > 1
-    pieces << current_piece unless current_piece.points.length <= 1
-    merge_short_pieces(pieces)
-  end
+      cumulative_angle += signed_angle
 
-  private
+      # Check if we should split here
+      t_value = i.to_f / @tangents.length
 
-  def finalize_piece(piece)
-    return if piece.points.empty?
-    piece.arc_length = piece.points.last.arc_length - piece.points.first.arc_length
-    piece.start_angle = piece.points.first.tangent.angle
-    piece.end_angle = piece.points.last.tangent.angle
-    piece.sweep_angle = normalize_angle(piece.end_angle - piece.start_angle)
-
-    max_curv = piece.points.map { |p| p.curvature.abs }.max
-    if max_curv < CURVATURE_THRESHOLD
-      piece.piece_type = :straight
-      piece.radius = Float::INFINITY
-    else
-      piece.piece_type = :curve
-      non_zero = piece.points.map(&:curvature).reject { |c| c.abs < 0.0001 }
-      if non_zero.any?
-        piece.radius = (1.0 / (non_zero.map(&:abs).sum / non_zero.length)).abs
-        if piece.radius < MIN_RADIUS_MM
-          piece.radius = MIN_RADIUS_MM
-          piece.is_signature = true
+      # Split conditions:
+      # 1. Significant cumulative angle since last split (corner completed)
+      # 2. Direction reversal (turn the other way)
+      # 3. Minimum spacing respected
+      if (t_value - splits.last) >= MIN_SPLIT_SPACING
+        if cumulative_angle.abs > angle_threshold * 3  # ~45 degrees accumulated
+          splits << t_value
+          cumulative_angle = 0.0
+          last_split_index = i
         end
       end
     end
-    piece.name = generate_name(piece)
-  end
 
-  def generate_name(piece)
-    if piece.piece_type == :straight
-      "S#{piece.id}_#{piece.arc_length.round(0)}mm"
-    else
-      dir = piece.direction == :left ? "L" : "R"
-      angle = (piece.sweep_angle.abs * 180 / Math::PI).round(0)
-      radius = piece.radius.finite? ? piece.radius.round(0) : "INF"
-      "C#{piece.id}_#{angle}deg_#{dir}_R#{radius}"
+    # Method 2: Also split at local curvature extrema (apex of corners)
+    window = 20
+    smoothed_curvatures = smooth_curvatures(window)
+
+    i = window
+    while i < smoothed_curvatures.length - window
+      curv = smoothed_curvatures[i]
+
+      # Check if this is a local maximum
+      is_local_max = true
+      (-window..window).each do |offset|
+        next if offset == 0
+        if smoothed_curvatures[i + offset] > curv
+          is_local_max = false
+          break
+        end
+      end
+
+      if is_local_max && curv > CURVATURE_THRESHOLD * 0.5
+        t_value = i.to_f / smoothed_curvatures.length
+
+        # Only add if sufficiently spaced from existing splits
+        closest_split = splits.min_by { |s| (s - t_value).abs }
+        if (t_value - closest_split).abs >= MIN_SPLIT_SPACING * 0.7
+          splits << t_value
+        end
+      end
+
+      i += 1
     end
-  end
 
-  def normalize_angle(angle)
-    angle -= 2 * Math::PI while angle > Math::PI
-    angle += 2 * Math::PI while angle < -Math::PI
-    angle
-  end
+    # Sort and ensure end point
+    splits = splits.sort.uniq
+    splits << 1.0 unless splits.last && splits.last > 0.95
 
-  def merge_short_pieces(pieces)
-    return pieces if pieces.length < 2
-    merged = [pieces.first]
-    pieces[1..-1].each do |piece|
-      if merged.last.arc_length < MIN_PIECE_LENGTH_MM && merged.last.piece_type == piece.piece_type
-        merged.last.points.concat(piece.points[1..-1])
-        finalize_piece(merged.last)
-      else
-        merged << piece
+    # Merge splits that are too close together
+    merged = [splits.first]
+    splits[1..-1].each do |s|
+      if (s - merged.last) >= MIN_SPLIT_SPACING * 0.5
+        merged << s
       end
     end
-    merged.each_with_index { |p, i| p.id = i + 1 }
+
+    # Apply special pieces - remove splits within special piece ranges
+    # and add splits at their boundaries
+    final_splits = apply_special_pieces(merged)
+
+    # Apply chicane protection
+    if CHICANE_PROTECTION
+      final_splits = apply_chicane_protection(final_splits)
+    end
+
+    final_splits
+  end
+
+  def apply_special_pieces(splits)
+    return splits if SPECIAL_PIECES.empty?
+
+    result = []
+    special_boundaries = []
+
+    # Collect all special piece boundaries
+    SPECIAL_PIECES.each do |piece|
+      special_boundaries << piece[:t_start]
+      special_boundaries << piece[:t_end]
+    end
+
+    # Filter out splits that fall within special pieces
+    splits.each do |s|
+      in_special = SPECIAL_PIECES.any? do |piece|
+        s > piece[:t_start] && s < piece[:t_end]
+      end
+
+      unless in_special
+        result << s
+      end
+    end
+
+    # Add boundaries of special pieces as split points
+    special_boundaries.each do |boundary|
+      # Only add if not too close to existing splits
+      closest = result.min_by { |s| (s - boundary).abs }
+      if closest.nil? || (boundary - closest).abs >= MIN_SPLIT_SPACING * 0.3
+        result << boundary
+      end
+    end
+
+    result.sort.uniq
+  end
+
+  def apply_chicane_protection(splits)
+    return splits if splits.length < 3
+
+    # Detect chicanes by looking for rapid direction reversals
+    chicane_threshold = CHICANE_ANGLE_THRESHOLD * Math::PI / 180.0
+
+    protected_ranges = []
+
+    # Analyze direction changes between split points
+    (0...splits.length - 1).each do |i|
+      t_start = splits[i]
+      t_end = splits[[i + 1, splits.length - 1].min]
+
+      # Sample direction changes within this segment
+      reversals = count_direction_reversals(t_start, t_end, chicane_threshold)
+
+      if reversals >= CHICANE_MIN_REVERSALS
+        # This segment contains a chicane - find its extent
+        # Look ahead to see if the chicane continues
+        chicane_end = t_end
+
+        j = i + 1
+        while j < splits.length - 1
+          next_reversals = count_direction_reversals(splits[j], splits[j + 1], chicane_threshold)
+          if next_reversals >= 1
+            chicane_end = splits[j + 1]
+            j += 1
+          else
+            break
+          end
+        end
+
+        protected_ranges << { start: t_start, finish: chicane_end }
+      end
+    end
+
+    # Merge overlapping protected ranges
+    merged_ranges = merge_ranges(protected_ranges)
+
+    # Remove splits that fall within chicane ranges (except boundaries)
+    result = []
+    splits.each do |s|
+      in_chicane = merged_ranges.any? do |range|
+        s > range[:start] && s < range[:finish]
+      end
+
+      unless in_chicane
+        result << s
+      end
+    end
+
+    # Ensure chicane boundaries are included
+    merged_ranges.each do |range|
+      result << range[:start] unless result.include?(range[:start])
+      result << range[:finish] unless result.include?(range[:finish])
+    end
+
+    result.sort.uniq
+  end
+
+  def count_direction_reversals(t_start, t_end, threshold)
+    start_idx = (t_start * (@tangents.length - 1)).round
+    end_idx = (t_end * (@tangents.length - 1)).round
+
+    return 0 if end_idx <= start_idx
+
+    reversals = 0
+    cumulative = 0.0
+    last_sign = nil
+
+    (start_idx...end_idx).each do |i|
+      next if i >= @tangents.length - 1
+
+      prev_t = @tangents[i]
+      curr_t = @tangents[i + 1]
+
+      dot = prev_t[0] * curr_t[0] + prev_t[1] * curr_t[1]
+      dot = [[dot, -1.0].max, 1.0].min
+      angle = Math.acos(dot)
+
+      cross = prev_t[0] * curr_t[1] - prev_t[1] * curr_t[0]
+      sign = cross >= 0 ? 1 : -1
+
+      cumulative += angle
+
+      if cumulative > threshold
+        if last_sign && sign != last_sign
+          reversals += 1
+        end
+        last_sign = sign
+        cumulative = 0.0
+      end
+    end
+
+    reversals
+  end
+
+  def merge_ranges(ranges)
+    return [] if ranges.empty?
+
+    sorted = ranges.sort_by { |r| r[:start] }
+    merged = [sorted.first.dup]
+
+    sorted[1..-1].each do |range|
+      if range[:start] <= merged.last[:finish]
+        merged.last[:finish] = [merged.last[:finish], range[:finish]].max
+      else
+        merged << range.dup
+      end
+    end
+
     merged
+  end
+
+  def smooth_curvatures(window)
+    result = []
+    @curvatures.each_with_index do |_, i|
+      start_i = [i - window, 0].max
+      end_i = [i + window, @curvatures.length - 1].min
+      avg = @curvatures[start_i..end_i].sum / (end_i - start_i + 1).to_f
+      result << avg
+    end
+    result
+  end
+
+  def point_at(t)
+    index = (t * (@points.length - 1)).round
+    index = [[index, 0].max, @points.length - 1].min
+    @points[index]
+  end
+
+  def tangent_at(t)
+    index = (t * (@tangents.length - 1)).round
+    index = [[index, 0].max, @tangents.length - 1].min
+    @tangents[index]
+  end
+
+  private
+
+  def analyze
+    parser = PathParser.new(@path_data)
+
+    current_x = 0.0
+    current_y = 0.0
+
+    parser.commands.each do |cmd|
+      case cmd[:type]
+      when 'M', 'm'
+        # Move to
+        args = cmd[:args]
+        if cmd[:type] == 'M'
+          current_x = args[0]
+          current_y = args[1]
+        else
+          current_x += args[0]
+          current_y += args[1]
+        end
+        @points << [current_x, current_y]
+        @curvatures << 0
+        @tangents << [1, 0]  # Default tangent
+
+      when 'c'
+        # Relative cubic bezier - may have multiple sets of coordinates
+        args = cmd[:args]
+        i = 0
+        while i < args.length
+          p0 = [current_x, current_y]
+          p1 = [current_x + args[i], current_y + args[i+1]]
+          p2 = [current_x + args[i+2], current_y + args[i+3]]
+          p3 = [current_x + args[i+4], current_y + args[i+5]]
+
+          # Sample this curve
+          (1..@samples_per_curve).each do |s|
+            t = s.to_f / @samples_per_curve
+            pt = BezierCurve.cubic_point(p0, p1, p2, p3, t)
+            curv = BezierCurve.cubic_curvature(p0, p1, p2, p3, t)
+            deriv = BezierCurve.cubic_derivative(p0, p1, p2, p3, t)
+
+            # Normalize tangent
+            len = Math.sqrt(deriv[0]**2 + deriv[1]**2)
+            tangent = len > 0 ? [deriv[0]/len, deriv[1]/len] : [1, 0]
+
+            @points << pt
+            @curvatures << curv
+            @tangents << tangent
+          end
+
+          current_x = p3[0]
+          current_y = p3[1]
+          i += 6
+        end
+
+      when 'C'
+        # Absolute cubic bezier
+        args = cmd[:args]
+        i = 0
+        while i < args.length
+          p0 = [current_x, current_y]
+          p1 = [args[i], args[i+1]]
+          p2 = [args[i+2], args[i+3]]
+          p3 = [args[i+4], args[i+5]]
+
+          (1..@samples_per_curve).each do |s|
+            t = s.to_f / @samples_per_curve
+            pt = BezierCurve.cubic_point(p0, p1, p2, p3, t)
+            curv = BezierCurve.cubic_curvature(p0, p1, p2, p3, t)
+            deriv = BezierCurve.cubic_derivative(p0, p1, p2, p3, t)
+
+            len = Math.sqrt(deriv[0]**2 + deriv[1]**2)
+            tangent = len > 0 ? [deriv[0]/len, deriv[1]/len] : [1, 0]
+
+            @points << pt
+            @curvatures << curv
+            @tangents << tangent
+          end
+
+          current_x = p3[0]
+          current_y = p3[1]
+          i += 6
+        end
+
+      when 'z', 'Z'
+        # Close path - handled implicitly
+      end
+    end
+
+    # Calculate approximate path length
+    @path_length = 0.0
+    (1...@points.length).each do |i|
+      dx = @points[i][0] - @points[i-1][0]
+      dy = @points[i][1] - @points[i-1][1]
+      @path_length += Math.sqrt(dx*dx + dy*dy)
+    end
+
+    # Fix the first tangent (from 'M' command) using the tangent from nearby points
+    if @tangents.length > 1
+      @tangents[0] = @tangents[1]
+    end
   end
 end
 
-class PieceSVGGenerator
-  def initialize(piece)
-    @piece = piece
+#===============================================================================
+# SVG GENERATOR
+#===============================================================================
+
+class SplitVisualizer
+  def initialize(input_file, output_file)
+    @input_file = input_file
+    @output_file = output_file
   end
 
   def generate
-    points = @piece.points.map(&:position)
-    min_x, max_x = points.map(&:x).minmax
-    min_y, max_y = points.map(&:y).minmax
+    svg_content = File.read(@input_file)
 
-    width = max_x - min_x + TRACK_WIDTH_MM + 60
-    height = max_y - min_y + TRACK_WIDTH_MM + 60
-    offset_x = -min_x + TRACK_WIDTH_MM / 2 + 30
-    offset_y = -min_y + TRACK_WIDTH_MM / 2 + 30
-
-    <<~SVG
-      <?xml version="1.0" encoding="UTF-8"?>
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{width.round(1)} #{height.round(1)}" width="#{width.round(1)}" height="#{height.round(1)}">
-        <title>#{@piece.name}</title>
-        <rect width="#{width.round(1)}" height="#{height.round(1)}" fill="#fafafa"/>
-        <text x="10" y="20" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#333">#{@piece.name}#{@piece.is_signature ? ' ★' : ''}</text>
-        <text x="10" y="35" font-family="Arial, sans-serif" font-size="10" fill="#666">Length: #{@piece.arc_length.round(1)}mm | #{@piece.radius.finite? ? "R=#{@piece.radius.round(1)}mm" : "Straight"}</text>
-        <g transform="translate(#{offset_x.round(2)}, #{offset_y.round(2)})">
-          #{generate_track_body(points)}
-          #{generate_groove(points)}
-          #{generate_connectors(points)}
-        </g>
-        #{generate_grain_indicator(width, height)}
-      </svg>
-    SVG
-  end
-
-  private
-
-  def generate_track_body(points)
-    return "" if points.length < 2
-    left = offset_path(points, TRACK_WIDTH_MM / 2)
-    right = offset_path(points, -TRACK_WIDTH_MM / 2)
-    path_d = "M #{left.first.x.round(2)},#{left.first.y.round(2)} "
-    left[1..-1].each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
-    right.reverse.each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
-    color = @piece.is_signature ? "#6B3410" : "#d4a574"
-    stroke = @piece.is_signature ? "#4D2A0F" : "#8B4513"
-    %(<path d="#{path_d}Z" fill="#{color}" stroke="#{stroke}" stroke-width="1.5"/>)
-  end
-
-  def generate_groove(points)
-    return "" if points.length < 2
-    path_d = "M #{points.first.x.round(2)},#{points.first.y.round(2)} "
-    points[1..-1].each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
-    %(<path d="#{path_d}" fill="none" stroke="#5D3A1A" stroke-width="#{GROOVE_WIDTH_MM}" stroke-linecap="round"/>)
-  end
-
-  def generate_connectors(points)
-    return "" if points.length < 2
-    generate_female_connector(points.first, @piece.start_tangent * -1) +
-    generate_male_connector(points.last, @piece.end_tangent)
-  end
-
-  def generate_female_connector(pos, dir)
-    dir = dir.normalize
-    hole_center = pos + dir * 5
-    <<~SVG
-      <circle cx="#{hole_center.x.round(2)}" cy="#{hole_center.y.round(2)}" r="#{(CONNECTOR_HOLE_DIAMETER_MM/2).round(2)}" fill="#fafafa" stroke="#8B4513" stroke-width="1"/>
-    SVG
-  end
-
-  def generate_male_connector(pos, dir)
-    dir = dir.normalize
-    stem_end = pos + dir * CONNECTOR_STEM_LENGTH_MM
-    peg_center = stem_end + dir * (CONNECTOR_PEG_DIAMETER_MM / 2)
-    <<~SVG
-      <line x1="#{pos.x.round(2)}" y1="#{pos.y.round(2)}" x2="#{stem_end.x.round(2)}" y2="#{stem_end.y.round(2)}" stroke="#8B4513" stroke-width="#{(CONNECTOR_PEG_DIAMETER_MM * 0.6).round(2)}"/>
-      <circle cx="#{peg_center.x.round(2)}" cy="#{peg_center.y.round(2)}" r="#{(CONNECTOR_PEG_DIAMETER_MM/2).round(2)}" fill="#8B4513" stroke="#5D3A1A" stroke-width="1"/>
-    SVG
-  end
-
-  def offset_path(points, distance)
-    points.each_with_index.map do |point, i|
-      tangent = if i == 0 then (points[1] - points[0]).normalize
-                elsif i == points.length - 1 then (points[-1] - points[-2]).normalize
-                else ((points[i + 1] - points[i - 1]) / 2).normalize
-                end
-      point + tangent.perpendicular * distance
+    # Extract path data - look for d= that's preceded by a space (not id=)
+    path_match = svg_content.match(/\sd="([^"]+)"/)
+    unless path_match
+      puts "Error: Could not find path data in SVG"
+      return
     end
-  end
 
-  def generate_grain_indicator(width, height)
-    avg_tan = ((@piece.start_tangent + @piece.end_tangent) / 2).normalize
-    sx, sy = width - 80, height - 25
-    ex, ey = sx + avg_tan.x * 40, sy + avg_tan.y * 40
-    <<~SVG
-      <g>
-        <line x1="#{sx.round(2)}" y1="#{sy.round(2)}" x2="#{ex.round(2)}" y2="#{ey.round(2)}" stroke="#8B4513" stroke-width="2"/>
-        <polygon points="#{ex.round(2)},#{ey.round(2)} #{(ex - 5*avg_tan.x + 3*avg_tan.y).round(2)},#{(ey - 5*avg_tan.y - 3*avg_tan.x).round(2)} #{(ex - 5*avg_tan.x - 3*avg_tan.y).round(2)},#{(ey - 5*avg_tan.y + 3*avg_tan.x).round(2)}" fill="#8B4513"/>
-        <text x="#{(sx - 10).round(2)}" y="#{(sy + 5).round(2)}" font-family="Arial, sans-serif" font-size="8" fill="#8B4513">GRAIN</text>
-      </g>
-    SVG
-  end
-end
+    path_data = path_match[1]
 
-class TrackPieceGenerator
-  def initialize(input_file)
-    @input_file = input_file
-    @track_name = File.basename(input_file, ".*").gsub(/[^a-zA-Z0-9]/, "_")
-    @pieces = []
-    @output_dir = File.join(File.dirname(File.expand_path(input_file)), OUTPUT_DIR)
-  end
+    # Analyze the track
+    analyzer = TrackAnalyzer.new(path_data)
+    splits = analyzer.split_points
 
-  def process
-    puts "=" * 60
-    puts "TRACK PIECE GENERATOR"
-    puts "=" * 60
-    puts "\nInput:  #{@input_file}"
-    puts "Output: #{@output_dir}\n\n"
-    puts "Configuration:"
-    puts "  Min radius:       #{MIN_RADIUS_MM}mm"
-    puts "  Max piece length: #{MAX_PIECE_LENGTH_MM}mm"
-    puts "  Track width:      #{TRACK_WIDTH_MM}mm"
-    puts "  Simplification:   #{SIMPLIFICATION_LEVEL}"
-    puts "  Max dimensions:   #{MAX_TOTAL_WIDTH_MM} × #{MAX_TOTAL_HEIGHT_MM}mm\n\n"
+    puts "Track Analysis:"
+    puts "  Total points sampled: #{analyzer.points.length}"
+    puts "  Approximate path length: #{analyzer.path_length.round(2)} SVG units"
+    puts "  Split points found: #{splits.length}"
 
-    svg_content = File.read(@input_file, encoding: 'UTF-8')
-    path_data = extract_path(svg_content)
-    return puts("ERROR: No path data found in SVG") || false if path_data.nil?
-
-    puts "Parsing SVG path..."
-    raw_points = SVGPathParser.new(path_data).parse
-    puts "  Found #{raw_points.length} points"
-
-    scaled = scale_to_fit(raw_points)
-    puts "  Scaled to fit within #{MAX_TOTAL_WIDTH_MM}×#{MAX_TOTAL_HEIGHT_MM}mm"
-
-    tolerance = SIMPLIFICATION_LEVEL * 20
-    simplified = PathSimplifier.new(scaled, tolerance).simplify
-    puts "  Simplified to #{simplified.length} points"
-
-    track_points = CurvatureAnalyzer.new(simplified).analyze
-    @pieces = TrackSegmenter.new(track_points).segment
-    puts "  Segmented into #{@pieces.length} pieces\n\n"
-
-    generate_output
-    true
-  end
-
-  private
-
-  def extract_path(svg)
-    svg = svg.encode('UTF-8', invalid: :replace, undef: :replace, replace: '')
-    paths = svg.scan(/<path[^>]*d="([^"]+)"[^>]*>/i) + svg.scan(/<path[^>]*d='([^']+)'[^>]*>/i)
-    paths.flatten.max_by(&:length)
-  end
-
-  def scale_to_fit(points)
-    return points if points.empty?
-    min_x, max_x = points.map(&:x).minmax
-    min_y, max_y = points.map(&:y).minmax
-    w, h = max_x - min_x, max_y - min_y
-    return points if w.zero? || h.zero?
-    scale = [MAX_TOTAL_WIDTH_MM / w, MAX_TOTAL_HEIGHT_MM / h].min
-    cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
-    points.map { |p| Vector2D.new((p.x - cx) * scale, (p.y - cy) * scale) }
-  end
-
-  def generate_output
-    # FileUtils.mkdir_p(@output_dir)
-    # pieces_dir = File.join(@output_dir, "pieces")
-    # FileUtils.mkdir_p(pieces_dir)
-
-    generate_split_svg
-    # generate_layout_svg
-    # @pieces.each { |p| generate_piece_svg(p, pieces_dir) }
-    # generate_inventory
-
-    # puts "\n" + "=" * 60
-    # puts "Output generated in: #{@output_dir}"
-    # puts "=" * 60
-  end
-
-  def generate_split_svg
-    # Get all points from all pieces for the full track path
-    all_points = @pieces.flat_map { |p| p.points.map(&:position) }
-    return if all_points.length < 2
-
-    min_x, max_x = all_points.map(&:x).minmax
-    min_y, max_y = all_points.map(&:y).minmax
-    padding = 50
-    width = max_x - min_x + padding * 2
-    height = max_y - min_y + padding * 2
-    offset_x = -min_x + padding
-    offset_y = -min_y + padding
-
-    svg = <<~SVG
-      <?xml version="1.0" encoding="UTF-8"?>
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{width.round(1)} #{height.round(1)}" width="#{width.round(1)}" height="#{height.round(1)}">
-        <title>#{@track_name} - Split Markers</title>
-        <rect width="#{width.round(1)}" height="#{height.round(1)}" fill="#fafafa"/>
-        <g transform="translate(#{offset_x.round(2)}, #{offset_y.round(2)})">
-    SVG
-
-    # Draw the track as a single path (black stroke like original)
-    path_d = "M #{all_points.first.x.round(2)},#{all_points.first.y.round(2)} "
-    all_points[1..-1].each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
-    svg += %(<path d="#{path_d}" fill="none" stroke="#000" stroke-width="7.5" stroke-linejoin="round"/>\n)
-
-    # Draw red split markers at piece boundaries
-    split_marker_length = 20  # Length of the red marker line
-
-    @pieces.each_with_index do |piece, idx|
-      next if piece.points.empty?
-
-      # Mark the start of each piece (except the first one, which is the track start)
-      if idx > 0
-        start_pos = piece.points.first.position
-        start_tangent = piece.points.first.tangent
-        perp = start_tangent.perpendicular.normalize
-
-        # Draw perpendicular red line at split point
-        p1 = start_pos + perp * split_marker_length
-        p2 = start_pos - perp * split_marker_length
-
-        svg += %(<line x1="#{p1.x.round(2)}" y1="#{p1.y.round(2)}" x2="#{p2.x.round(2)}" y2="#{p2.y.round(2)}" stroke="#FF0000" stroke-width="3" stroke-linecap="round"/>\n)
+    if SPECIAL_PIECES.any?
+      puts ""
+      puts "Special Pieces (kept as single units):"
+      SPECIAL_PIECES.each do |piece|
+        start_pt = analyzer.point_at(piece[:t_start])
+        end_pt = analyzer.point_at(piece[:t_end])
+        puts "  #{piece[:name]}: t=#{piece[:t_start]}-#{piece[:t_end]}"
+        puts "    from (#{start_pt[0].round(1)}, #{start_pt[1].round(1)}) to (#{end_pt[0].round(1)}, #{end_pt[1].round(1)})"
       end
     end
 
-    # Also mark the track end/start connection point
-    if @pieces.any?
-      last_piece = @pieces.last
-      if last_piece.points.any?
-        end_pos = last_piece.points.last.position
-        end_tangent = last_piece.points.last.tangent
-        perp = end_tangent.perpendicular.normalize
+    puts ""
 
-        p1 = end_pos + perp * split_marker_length
-        p2 = end_pos - perp * split_marker_length
+    # Generate split lines
+    split_lines = []
+    splits.each_with_index do |t, i|
+      point = analyzer.point_at(t)
+      tangent = analyzer.tangent_at(t)
 
-        svg += %(<line x1="#{p1.x.round(2)}" y1="#{p1.y.round(2)}" x2="#{p2.x.round(2)}" y2="#{p2.y.round(2)}" stroke="#FF0000" stroke-width="3" stroke-linecap="round"/>\n)
-      end
+      # Perpendicular to tangent
+      perp = [-tangent[1], tangent[0]]
+
+      # Create a line perpendicular to the track at this point
+      half_len = SPLIT_LINE_LENGTH / 2
+      x1 = point[0] - perp[0] * half_len
+      y1 = point[1] - perp[1] * half_len
+      x2 = point[0] + perp[0] * half_len
+      y2 = point[1] + perp[1] * half_len
+
+      split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH}"/>)
+
+      puts "  Split #{i + 1}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
     end
 
-    svg += %(</g>\n</svg>)
+    # Extract dimensions
+    width = svg_content[/width="([^"]+)"/, 1].to_f
+    height = svg_content[/height="([^"]+)"/, 1].to_f
+    viewbox_match = svg_content.match(/viewBox="([^"]+)"/)
+    viewbox = viewbox_match ? viewbox_match[1].split.map(&:to_f) : [0, 0, width, height]
 
-    # Write to the same directory as input, not the output directory
-    path = File.join(File.dirname(File.expand_path(@input_file)), "#{@track_name}-split.svg")
-    File.write(path, svg)
-    puts "Generated: #{path}"
+    # Calculate padded dimensions
+    padded_width = width + (SVG_PADDING * 2)
+    padded_height = height + (SVG_PADDING * 2)
+    padded_viewbox = [
+      viewbox[0] - SVG_PADDING,
+      viewbox[1] - SVG_PADDING,
+      viewbox[2] + (SVG_PADDING * 2),
+      viewbox[3] + (SVG_PADDING * 2)
+    ].map { |v| v.round(4) }.join(' ')
 
-    # Open in Preview
-    system("open", "-a", "Preview", path)
-  end
+    # Build modified SVG with padding
+    # Create a larger background rect that covers the padded area
+    bg_rect = %(<rect x="#{viewbox[0] - SVG_PADDING}" y="#{viewbox[1] - SVG_PADDING}" width="#{viewbox[2] + SVG_PADDING * 2}" height="#{viewbox[3] + SVG_PADDING * 2}" fill="white"/>)
+    split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
 
-  def generate_layout_svg
-    all_points = @pieces.flat_map { |p| p.points.map(&:position) }
-    min_x, max_x = all_points.map(&:x).minmax
-    min_y, max_y = all_points.map(&:y).minmax
-    width, height = max_x - min_x + 100, max_y - min_y + 150
-    offset_x, offset_y = -min_x + 50, -min_y + 100
+    # Update SVG dimensions and viewBox
+    modified_svg = svg_content.dup
+    modified_svg = modified_svg.sub(/width="[^"]+"/, %(width="#{padded_width.round(2)}"))
+    modified_svg = modified_svg.sub(/height="[^"]+"/, %(height="#{padded_height.round(2)}"))
+    modified_svg = modified_svg.sub(/viewBox="[^"]+"/, %(viewBox="#{padded_viewbox}"))
 
-    colors = %w[#8B4513 #A0522D #CD853F #DEB887 #D2691E #B8860B #DAA520 #F4A460]
+    # Insert background right after the opening <svg> tag
+    modified_svg = modified_svg.sub(/>(\s*<path)/, ">\n#{bg_rect}\\1")
 
-    svg = <<~SVG
-      <?xml version="1.0" encoding="UTF-8"?>
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{width.round(1)} #{height.round(1)}" width="#{width.round(1)}" height="#{height.round(1)}">
-        <title>#{@track_name} - Layout</title>
-        <rect width="#{width.round(1)}" height="#{height.round(1)}" fill="#f5f5f0"/>
-        <text x="#{(width/2).round(1)}" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">#{@track_name.upcase}</text>
-        <text x="#{(width/2).round(1)}" y="50" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#666">#{@pieces.length} pieces | #{@pieces.count(&:is_signature)} signature | Total: #{@pieces.sum(&:arc_length).round(0)}mm</text>
-        <g transform="translate(#{offset_x.round(2)}, #{offset_y.round(2)})">
-    SVG
+    # Insert split lines before closing </svg>
+    modified_svg = modified_svg.sub(/<\/svg>/, "#{split_group}\n</svg>")
 
-    @pieces.each_with_index do |piece, idx|
-      color = piece.is_signature ? "#8B0000" : colors[idx % colors.length]
-      points = piece.points.map(&:position)
-      next if points.length < 2
+    File.write(@output_file, modified_svg)
 
-      left = offset_path_simple(points, TRACK_WIDTH_MM / 2)
-      right = offset_path_simple(points, -TRACK_WIDTH_MM / 2)
-      path_d = "M #{left.first.x.round(2)},#{left.first.y.round(2)} "
-      left[1..-1].each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
-      right.reverse.each { |p| path_d += "L #{p.x.round(2)},#{p.y.round(2)} " }
-
-      mid = points[points.length / 2]
-      svg += %(<g><path d="#{path_d}Z" fill="#{color}" stroke="#333" stroke-width="1" opacity="0.8"/>)
-      svg += %(<text x="#{mid.x.round(2)}" y="#{mid.y.round(2)}" font-family="Arial" font-size="10" fill="white" text-anchor="middle" stroke="#333" stroke-width="0.5">#{piece.id}</text></g>\n)
-    end
-
-    svg += %(</g><text x="20" y="#{height - 15}" font-family="Arial" font-size="10" fill="#666">★ = Signature piece</text></svg>)
-
-    path = File.join(@output_dir, "#{@track_name}_layout.svg")
-    File.write(path, svg)
-    puts "Generated: #{path}"
-  end
-
-  def offset_path_simple(points, distance)
-    points.each_with_index.map do |point, i|
-      tangent = if i == 0 then (points[1] - points[0]).normalize
-                elsif i == points.length - 1 then (points[-1] - points[-2]).normalize
-                else ((points[i + 1] - points[i - 1]) / 2).normalize
-                end
-      point + tangent.perpendicular * distance
-    end
-  end
-
-  def generate_piece_svg(piece, dir)
-    svg = PieceSVGGenerator.new(piece).generate
-    path = File.join(dir, "#{piece.name}.svg")
-    File.write(path, svg)
-    puts "Generated: #{path}"
-  end
-
-  def generate_inventory
-    inv = {
-      track_name: @track_name,
-      generated_at: Time.now.iso8601,
-      parameters: { min_radius: MIN_RADIUS_MM, max_piece_length: MAX_PIECE_LENGTH_MM,
-                    track_width: TRACK_WIDTH_MM, simplification: SIMPLIFICATION_LEVEL },
-      summary: { total: @pieces.length, straights: @pieces.count { |p| p.piece_type == :straight },
-                 curves: @pieces.count { |p| p.piece_type == :curve },
-                 signature: @pieces.count(&:is_signature),
-                 total_length: @pieces.sum(&:arc_length).round(1) },
-      pieces: @pieces.map(&:to_inventory_entry)
-    }
-
-    File.write(File.join(@output_dir, "#{@track_name}_inventory.json"), JSON.pretty_generate(inv))
-    puts "Generated: #{@output_dir}/#{@track_name}_inventory.json"
-
-    txt = generate_text_inventory(inv)
-    File.write(File.join(@output_dir, "#{@track_name}_inventory.txt"), txt)
-    puts "Generated: #{@output_dir}/#{@track_name}_inventory.txt"
-  end
-
-  def generate_text_inventory(inv)
-    lines = ["=" * 70, "#{inv[:track_name].upcase} - PIECE INVENTORY", "=" * 70, "",
-             "Generated: #{inv[:generated_at]}", "", "CONFIGURATION:", "-" * 40]
-    inv[:parameters].each { |k, v| lines << "  #{k}: #{v}" }
-    lines += ["", "SUMMARY:", "-" * 40]
-    inv[:summary].each { |k, v| lines << "  #{k}: #{v}" }
-    lines += ["", "PIECES:", "-" * 70,
-              sprintf("%-4s %-30s %-15s %10s %10s", "ID", "Name", "Type", "Length", "Radius"), "-" * 70]
-    inv[:pieces].each do |p|
-      sig = p[:is_signature] ? "★" : " "
-      lines << sprintf("%s%-3s %-30s %-15s %10s %10s", sig, p[:id], p[:name], p[:type],
-                       "#{p[:arc_length]}mm", p[:radius] ? "#{p[:radius]}mm" : "∞")
-    end
-    lines << "-" * 70
-    lines << "\n★ = Signature piece (minimum radius)"
-    lines.join("\n")
+    puts ""
+    puts "Generated #{@output_file} with #{splits.length} split indicators"
+    puts ""
+    puts "Piece count estimate: #{splits.length - 1} pieces"
   end
 end
 
-# Entry point
-if ARGV.empty?
-  puts "Usage: ruby #{$0} INPUT_SVG"
-  puts "\nEdit the CONFIGURATION section at the top of this file to adjust parameters."
+#===============================================================================
+# MAIN
+#===============================================================================
+
+unless File.exist?(INPUT_FILE)
+  puts "Error: File not found: #{INPUT_FILE}"
   exit 1
 end
 
-unless File.exist?(ARGV[0])
-  puts "Error: File not found: #{ARGV[0]}"
-  exit 1
-end
+visualizer = SplitVisualizer.new(INPUT_FILE, OUTPUT_FILE)
+visualizer.generate
 
-exit(TrackPieceGenerator.new(ARGV[0]).process ? 0 : 1)
+puts ""
+puts "Configuration Summary:"
+puts "  Car dimensions: #{CAR_LENGTH_MM}mm x #{CAR_WIDTH_MM}mm"
+puts "  Track width: #{TRACK_WIDTH_MM}mm"
+puts "  Min turn radius: #{MIN_TURN_RADIUS_MM}mm"
+puts "  Max piece length: #{MAX_PIECE_LENGTH_MM}mm"
+puts "  Max assembled size: #{MAX_TRACK_DIMENSION_MM}mm (#{(MAX_TRACK_DIMENSION_MM / 25.4).round(1)} inches)"
+
+puts ""
+print 'Opening in Cursor...'
+system("cursor", OUTPUT_FILE)

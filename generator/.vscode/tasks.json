@@ -4,10 +4,10 @@
     {
       "label": "Run Ruby",
       "type": "shell",
-      "command": "ruby",
-      "args": ["${file}"],
+      "command": "clear && ruby ${file}",
       "presentation": {
-        "focus": true
+        "showReuseMessage": false,
+        "clear": true
       }
     }
   ]
