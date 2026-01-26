@@ -83,26 +83,8 @@ SCALING_MODE = :uniform
 # Target maximum dimension (width or height) in inches
 TARGET_MAX_DIMENSION_IN = MAX_TRACK_DIMENSION_IN
 
-# Track simplification
-SIMPLIFY_STRAIGHTS = true         # Combine short straights into longer pieces
-SIMPLIFY_THRESHOLD_DEG = 10.0     # Angle threshold for "straight" detection
-
-# Split point configuration
-MIN_SPLIT_SPACING = 0.05          # Minimum spacing between splits (as fraction of path)
-CURVATURE_THRESHOLD = 0.15        # Threshold for detecting significant curves
-
-# Straight-to-curve splitting
-SPLIT_AT_STRAIGHT_END = true      # Split where straights meet curves
-STRAIGHT_CURVATURE_MAX = 0.05     # Max curvature to be considered "straight"
-MIN_STRAIGHT_LENGTH = 0.08        # Minimum length (as fraction) to qualify as a straight
-
 # Straight piece simplification
 STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a straight line
-
-# Chicane protection - keep tight S-curves as single pieces
-CHICANE_PROTECTION = true         # Enable chicane detection
-CHICANE_ANGLE_THRESHOLD = 60.0    # Degrees - direction change that indicates a chicane
-CHICANE_MIN_REVERSALS = 2         # Minimum direction reversals to qualify as chicane
 
 
 
@@ -125,8 +107,8 @@ MANUAL_SPLITS = [
   0.259,  # Split 4
   0.285,  # Split 5
   0.457,  # Split 6
-  0.575,  # Split 7
-  0.605,  # Split 8
+  0.56,  # Split 7
+  0.60,  # Split 8
   0.745,  # Split 9
   0.805,  # Split 10
   0.89,   # Split 11
@@ -153,12 +135,13 @@ MANUAL_SPLITS = [
 #   }
 
 PIECE_TWEAKS = {
-  3 => { min_corner_radius: 1.5, inner_width_offset: 0.25 },
+  # 3 => { min_corner_radius: 2.5, inner_width_offset: 0.25 },
+  # 11 => { min_corner_radius: 2.5, inner_width_offset: 0.0 },
 }
 
 # Visual settings for split preview (all dimensions in inches)
 SPLIT_LINE_COLOR = '#FF0000'
-SPLIT_LINE_WIDTH_IN = 0.1         # Thin line for precise split visualization
+SPLIT_LINE_WIDTH_IN = 0.05         # Thin line for precise split visualization
 SVG_PADDING_IN = 5.0              # White border padding around the SVG (inches)
 
 # Display scale - multiplier for SVG width/height attributes
@@ -169,7 +152,7 @@ SVG_DISPLAY_SCALE = 8
 # Ghost track settings - shows original track for comparison
 SHOW_GHOST_TRACK = true           # Enable ghost track overlay
 GHOST_TRACK_COLOR = '#FF0000'     # Light gray for ghost
-GHOST_TRACK_OPACITY = 0.4         # Transparency (0-1)
+GHOST_TRACK_OPACITY = 0.3         # Transparency (0-1)
 GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
 
 # Tight radius warning visualization
@@ -515,300 +498,6 @@ class TrackAnalyzer
       dy = @points[i][1] - @points[i-1][1]
       @path_length += Math.sqrt(dx*dx + dy*dy)
     end
-  end
-
-  def split_points
-    # Find points where we should split the track based on direction changes
-    splits = []
-
-    # Always split at start
-    splits << 0.0
-
-    # Calculate cumulative angle changes to detect significant direction shifts
-    # We look for points where the direction has changed significantly
-    angle_threshold = SIMPLIFY_THRESHOLD_DEG * Math::PI / 180.0  # Convert to radians
-
-    # Method 1: Track cumulative direction changes
-    cumulative_angle = 0.0
-    last_split_index = 0
-
-    (1...@tangents.length).each do |i|
-      prev_t = @tangents[i-1]
-      curr_t = @tangents[i]
-
-      # Calculate angle between consecutive tangents
-      dot = prev_t[0] * curr_t[0] + prev_t[1] * curr_t[1]
-      dot = [[dot, -1.0].max, 1.0].min  # Clamp for numerical stability
-      angle = Math.acos(dot)
-
-      # Determine direction (left or right turn) using cross product
-      cross = prev_t[0] * curr_t[1] - prev_t[1] * curr_t[0]
-      signed_angle = cross >= 0 ? angle : -angle
-
-      cumulative_angle += signed_angle
-
-      # Check if we should split here
-      t_value = i.to_f / @tangents.length
-
-      # Split conditions:
-      # 1. Significant cumulative angle since last split (corner completed)
-      # 2. Direction reversal (turn the other way)
-      # 3. Minimum spacing respected
-      if (t_value - splits.last) >= MIN_SPLIT_SPACING
-        if cumulative_angle.abs > angle_threshold * 3  # ~45 degrees accumulated
-          splits << t_value
-          cumulative_angle = 0.0
-          last_split_index = i
-        end
-      end
-    end
-
-    # Method 2: Also split at local curvature extrema (apex of corners)
-    window = 20
-    smoothed_curvatures = smooth_curvatures(window)
-
-    i = window
-    while i < smoothed_curvatures.length - window
-      curv = smoothed_curvatures[i]
-
-      # Check if this is a local maximum
-      is_local_max = true
-      (-window..window).each do |offset|
-        next if offset == 0
-        if smoothed_curvatures[i + offset] > curv
-          is_local_max = false
-          break
-        end
-      end
-
-      if is_local_max && curv > CURVATURE_THRESHOLD * 0.5
-        t_value = i.to_f / smoothed_curvatures.length
-
-        # Only add if sufficiently spaced from existing splits
-        closest_split = splits.min_by { |s| (s - t_value).abs }
-        if (t_value - closest_split).abs >= MIN_SPLIT_SPACING * 0.7
-          splits << t_value
-        end
-      end
-
-      i += 1
-    end
-
-    # Sort and ensure end point
-    splits = splits.sort.uniq
-    splits << 1.0 unless splits.last && splits.last > 0.95
-
-    # Merge splits that are too close together
-    merged = [splits.first]
-    splits[1..-1].each do |s|
-      if (s - merged.last) >= MIN_SPLIT_SPACING * 0.5
-        merged << s
-      end
-    end
-
-    # Add splits at straight-to-curve transitions
-    if SPLIT_AT_STRAIGHT_END
-      merged = add_straight_curve_splits(merged)
-    end
-
-    # Apply chicane protection
-    if CHICANE_PROTECTION
-      merged = apply_chicane_protection(merged)
-    end
-
-    merged
-  end
-
-  def add_straight_curve_splits(splits)
-    # Find straight sections and add splits at their ends (where curves begin)
-    window = 10
-    smoothed = smooth_curvatures(window)
-
-    straight_transitions = []
-
-    # Scan through the track looking for straight-to-curve transitions
-    in_straight = false
-    straight_start = 0
-
-    smoothed.each_with_index do |curv, i|
-      t_value = i.to_f / smoothed.length
-      is_straight = curv < STRAIGHT_CURVATURE_MAX
-
-      if is_straight && !in_straight
-        # Starting a straight section
-        in_straight = true
-        straight_start = t_value
-      elsif !is_straight && in_straight
-        # Ending a straight section - this is where we want to split
-        straight_length = t_value - straight_start
-        if straight_length >= MIN_STRAIGHT_LENGTH
-          # Add split at the end of the straight (beginning of curve)
-          straight_transitions << { t: t_value, type: :straight_end }
-        end
-        in_straight = false
-      end
-    end
-
-    # Also detect curve-to-straight transitions (beginning of straights)
-    in_curve = false
-    curve_start = 0
-    smoothed.each_with_index do |curv, i|
-      t_value = i.to_f / smoothed.length
-      is_curve = curv >= STRAIGHT_CURVATURE_MAX * 2
-
-      if is_curve && !in_curve
-        in_curve = true
-        curve_start = t_value
-      elsif !is_curve && in_curve
-        # Exiting a curve into a straight
-        # Look ahead to confirm this is actually a straight
-        look_ahead = [i + 20, smoothed.length - 1].min
-        upcoming_avg = smoothed[i..look_ahead].sum / (look_ahead - i + 1).to_f
-        if upcoming_avg < STRAIGHT_CURVATURE_MAX
-          straight_transitions << { t: t_value, type: :straight_start }
-        end
-        in_curve = false
-      end
-    end
-
-    # Merge new splits with existing ones
-    new_splits = straight_transitions.map { |st| st[:t] }
-    all_splits = (splits + new_splits).sort.uniq
-
-    # Remove duplicates that are too close
-    merged = [all_splits.first]
-    all_splits[1..-1].each do |s|
-      if (s - merged.last) >= MIN_SPLIT_SPACING * 0.4
-        merged << s
-      end
-    end
-
-    merged
-  end
-
-  def apply_chicane_protection(splits)
-    return splits if splits.length < 3
-
-    # Detect chicanes by looking for rapid direction reversals
-    chicane_threshold = CHICANE_ANGLE_THRESHOLD * Math::PI / 180.0
-
-    protected_ranges = []
-
-    # Analyze direction changes between split points
-    (0...splits.length - 1).each do |i|
-      t_start = splits[i]
-      t_end = splits[[i + 1, splits.length - 1].min]
-
-      # Sample direction changes within this segment
-      reversals = count_direction_reversals(t_start, t_end, chicane_threshold)
-
-      if reversals >= CHICANE_MIN_REVERSALS
-        # This segment contains a chicane - find its extent
-        # Look ahead to see if the chicane continues
-        chicane_end = t_end
-
-        j = i + 1
-        while j < splits.length - 1
-          next_reversals = count_direction_reversals(splits[j], splits[j + 1], chicane_threshold)
-          if next_reversals >= 1
-            chicane_end = splits[j + 1]
-            j += 1
-          else
-            break
-          end
-        end
-
-        protected_ranges << { start: t_start, finish: chicane_end }
-      end
-    end
-
-    # Merge overlapping protected ranges
-    merged_ranges = merge_ranges(protected_ranges)
-
-    # Remove splits that fall within chicane ranges (except boundaries)
-    result = []
-    splits.each do |s|
-      in_chicane = merged_ranges.any? do |range|
-        s > range[:start] && s < range[:finish]
-      end
-
-      unless in_chicane
-        result << s
-      end
-    end
-
-    # Ensure chicane boundaries are included
-    merged_ranges.each do |range|
-      result << range[:start] unless result.include?(range[:start])
-      result << range[:finish] unless result.include?(range[:finish])
-    end
-
-    result.sort.uniq
-  end
-
-  def count_direction_reversals(t_start, t_end, threshold)
-    start_idx = (t_start * (@tangents.length - 1)).round
-    end_idx = (t_end * (@tangents.length - 1)).round
-
-    return 0 if end_idx <= start_idx
-
-    reversals = 0
-    cumulative = 0.0
-    last_sign = nil
-
-    (start_idx...end_idx).each do |i|
-      next if i >= @tangents.length - 1
-
-      prev_t = @tangents[i]
-      curr_t = @tangents[i + 1]
-
-      dot = prev_t[0] * curr_t[0] + prev_t[1] * curr_t[1]
-      dot = [[dot, -1.0].max, 1.0].min
-      angle = Math.acos(dot)
-
-      cross = prev_t[0] * curr_t[1] - prev_t[1] * curr_t[0]
-      sign = cross >= 0 ? 1 : -1
-
-      cumulative += angle
-
-      if cumulative > threshold
-        if last_sign && sign != last_sign
-          reversals += 1
-        end
-        last_sign = sign
-        cumulative = 0.0
-      end
-    end
-
-    reversals
-  end
-
-  def merge_ranges(ranges)
-    return [] if ranges.empty?
-
-    sorted = ranges.sort_by { |r| r[:start] }
-    merged = [sorted.first.dup]
-
-    sorted[1..-1].each do |range|
-      if range[:start] <= merged.last[:finish]
-        merged.last[:finish] = [merged.last[:finish], range[:finish]].max
-      else
-        merged << range.dup
-      end
-    end
-
-    merged
-  end
-
-  def smooth_curvatures(window)
-    result = []
-    @curvatures.each_with_index do |_, i|
-      start_i = [i - window, 0].max
-      end_i = [i + window, @curvatures.length - 1].min
-      avg = @curvatures[start_i..end_i].sum / (end_i - start_i + 1).to_f
-      result << avg
-    end
-    result
   end
 
   def point_at(t)
@@ -1634,8 +1323,8 @@ class SplitVisualizer
   # Build variable-width track piece with smooth transitions
   # Returns SVG path data for two sidewall polygons
   # Build variable-width track piece with smooth transitions
-  # Transition: 0.25" hold at start, 1" ease-in-out taper, same at end
-  def build_variable_width_piece(points, base_inner, target_inner, transition_start = 0.25, transition_length = 1.0)
+  # Transition: 0.25" hold at start, 2" ease-in-out taper, same at end
+  def build_variable_width_piece(points, base_inner, target_inner, transition_start = 0.25, transition_length = 2.0)
     return nil if points.nil? || points.length < 3
 
     # Calculate cumulative distance along the centerline
