@@ -34,8 +34,8 @@ WALL_HEIGHT_IN = 0.3     # Side wall height to keep cars on track
 
 # Turning constraints (in inches)
 # Minimum radius should be at least 1.5x car length for smooth turns
-MIN_TURN_RADIUS_IN = 4.72         # Tight chicane minimum
-COMFORTABLE_TURN_RADIUS_IN = 7.09 # Comfortable cornering
+MIN_TURN_RADIUS_IN = 4.5
+COMFORTABLE_TURN_RADIUS_IN = 5.5
 
 # Maximum assembled track size (in inches)
 MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
@@ -44,6 +44,38 @@ MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
 MAX_PIECE_LENGTH_IN = 11.81       # Max length of a single piece (for wood grain)
 MIN_PIECE_LENGTH_IN = 3.94        # Min length to be practical
 WOOD_THICKNESS_IN = 0.75          # 3/4 inch walnut
+
+#===============================================================================
+# SCALING CONFIGURATION
+#===============================================================================
+# Choose a scaling mode to fit the track within TARGET_MAX_DIMENSION_IN
+#
+# TRADE-OFFS:
+# - Smaller track = tighter curves (physics constraint)
+# - To fit Silverstone in 60" with 4.5" min turn radius is geometrically
+#   impossible without simplifying the chicanes in the source SVG.
+#
+# Scaling mode options:
+#   :none                  - No scaling (original ~156" x 118")
+#   :uniform               - Scale everything equally (RECOMMENDED)
+#                            Hits exact target, but curves get tighter
+#   :selective_straight    - Preserve curve radii, compress straights more
+#                            Results in LARGER footprint than target
+#   :radius_enforcement    - Try to widen tight curves after scaling
+#                            Experimental, may distort track shape
+SCALING_MODE = :uniform
+
+# Target maximum dimension (width or height) in inches
+TARGET_MAX_DIMENSION_IN = MAX_TRACK_DIMENSION_IN
+
+# For :selective_straight mode
+# How much to blend curves back toward original (0.5 = 50% preserved)
+# Higher = better curve radii but larger footprint
+STRAIGHT_COMPRESSION_RATIO = 0.5
+
+# For :radius_enforcement mode
+# Curves tighter than this will be widened after scaling
+MIN_SCALED_RADIUS_IN = MIN_TURN_RADIUS_IN
 
 # Track simplification
 SIMPLIFY_STRAIGHTS = true         # Combine short straights into longer pieces
@@ -110,7 +142,7 @@ GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
 
 # Main track visual style - "railroad" style with two rails and gap
 TRACK_OUTER_WIDTH = 12.0          # Total width of the track (outer edges)
-TRACK_RAIL_WIDTH = 2.5            # Width of each rail line
+TRACK_RAIL_WIDTH = 1.0            # Width of each rail line (thinner = see piece size better)
 TRACK_COLOR = '#000000'           # Color of the rails
 
 # Grain direction visualization
@@ -227,11 +259,509 @@ class BezierCurve
 end
 
 #===============================================================================
+# TRACK SCALER
+#===============================================================================
+
+class TrackScaler
+  attr_reader :scale_factor, :scaled_points, :scaled_curvatures, :scaled_tangents
+
+  def initialize(points, curvatures, tangents)
+    @original_points = points
+    @original_curvatures = curvatures
+    @original_tangents = tangents
+    @scale_factor = 1.0
+    @scaled_points = points.dup
+    @scaled_curvatures = curvatures.dup
+    @scaled_tangents = tangents.dup
+
+    apply_scaling if SCALING_MODE != :none
+  end
+
+  def apply_scaling
+    @scale_factor = calculate_base_scale_factor
+    puts ""
+    puts "="*60
+    puts "SCALING: #{SCALING_MODE.to_s.upcase}"
+    puts "="*60
+    report_original_dimensions
+
+    case SCALING_MODE
+    when :uniform
+      apply_uniform_scale
+    when :selective_straight
+      apply_selective_straight_scale
+    when :radius_enforcement
+      apply_radius_enforcement_scale
+    end
+
+    report_scaled_dimensions
+  end
+
+  private
+
+  def calculate_base_scale_factor
+    bounds = calculate_bounds(@original_points)
+    max_dim_svg = [bounds[:width], bounds[:height]].max
+    current_inches = max_dim_svg / SVG_UNITS_PER_INCH
+    TARGET_MAX_DIMENSION_IN / current_inches
+  end
+
+  def calculate_bounds(points)
+    all_x = points.map { |p| p[0] }
+    all_y = points.map { |p| p[1] }
+    {
+      width: all_x.max - all_x.min,
+      height: all_y.max - all_y.min,
+      min_x: all_x.min,
+      max_x: all_x.max,
+      min_y: all_y.min,
+      max_y: all_y.max,
+      center_x: (all_x.min + all_x.max) / 2.0,
+      center_y: (all_y.min + all_y.max) / 2.0
+    }
+  end
+
+  def report_original_dimensions
+    bounds = calculate_bounds(@original_points)
+    width_in = bounds[:width] / SVG_UNITS_PER_INCH
+    height_in = bounds[:height] / SVG_UNITS_PER_INCH
+    puts "Original: #{width_in.round(1)}\" x #{height_in.round(1)}\" (#{format_feet_inches(width_in)} x #{format_feet_inches(height_in)})"
+  end
+
+  def report_scaled_dimensions
+    bounds = calculate_bounds(@scaled_points)
+    width_in = bounds[:width] / SVG_UNITS_PER_INCH
+    height_in = bounds[:height] / SVG_UNITS_PER_INCH
+    puts "Scaled:   #{width_in.round(1)}\" x #{height_in.round(1)}\" (#{format_feet_inches(width_in)} x #{format_feet_inches(height_in)})"
+    puts "Scale factor: #{@scale_factor.round(4)} (#{(@scale_factor * 100).round(1)}%)"
+
+    # Check for radius violations
+    check_radius_violations
+  end
+
+  def format_feet_inches(inches)
+    feet = (inches / 12).floor
+    remaining = (inches % 12).round(1)
+    feet > 0 ? "#{feet}' #{remaining}\"" : "#{remaining}\""
+  end
+
+  def check_radius_violations
+    violations = 0
+    min_radius_found = Float::INFINITY
+
+    @scaled_curvatures.each do |curv|
+      next if curv < 0.0001  # Skip near-zero curvature (straight sections)
+      radius_svg = 1.0 / curv
+      radius_in = radius_svg / SVG_UNITS_PER_INCH
+      min_radius_found = [min_radius_found, radius_in].min
+      violations += 1 if radius_in < MIN_TURN_RADIUS_IN
+    end
+
+    if violations > 0
+      puts "WARNING: #{violations} points have turn radius < #{MIN_TURN_RADIUS_IN}\" minimum"
+      puts "         Minimum radius found: #{min_radius_found.round(2)}\""
+    else
+      puts "All turn radii OK (minimum: #{min_radius_found.round(2)}\")"
+    end
+  end
+
+  #=============================================================================
+  # UNIFORM SCALING
+  #=============================================================================
+
+  def apply_uniform_scale
+    bounds = calculate_bounds(@original_points)
+    center_x = bounds[:center_x]
+    center_y = bounds[:center_y]
+
+    @scaled_points = @original_points.map do |pt|
+      [
+        center_x + (pt[0] - center_x) * @scale_factor,
+        center_y + (pt[1] - center_y) * @scale_factor
+      ]
+    end
+
+    # Curvature scales inversely with size (smaller track = tighter curves)
+    @scaled_curvatures = @original_curvatures.map { |c| c / @scale_factor }
+
+    # Tangent directions don't change with uniform scaling
+    @scaled_tangents = @original_tangents.dup
+  end
+
+  #=============================================================================
+  # SELECTIVE STRAIGHT COMPRESSION
+  #=============================================================================
+
+  def apply_selective_straight_scale
+    # Strategy: Apply uniform scaling first, then blend curves back toward
+    # their original shape to preserve larger turn radii.
+    # This maintains track connectivity while giving curves gentler radii.
+
+    # First, apply uniform scaling to all points
+    apply_uniform_scale
+
+    # Now identify curved segments and blend them back toward original
+    segments = identify_segments
+    curve_segments = segments.select { |s| !s[:is_straight] }
+
+    puts "  Found #{segments.count { |s| s[:is_straight] }} straight segments"
+    puts "  Found #{curve_segments.length} curved segments to preserve"
+
+    # For each curve segment, blend scaled points back toward original
+    # The blend amount is controlled by STRAIGHT_COMPRESSION_RATIO
+    # Higher ratio = curves preserved more (closer to original shape)
+    blend_factor = STRAIGHT_COMPRESSION_RATIO  # 0.5 = 50% original, 50% scaled
+
+    bounds = calculate_bounds(@original_points)
+    center_x = bounds[:center_x]
+    center_y = bounds[:center_y]
+
+    curve_segments.each do |seg|
+      start_idx = (seg[:t_start] * (@original_points.length - 1)).round
+      end_idx = (seg[:t_end] * (@original_points.length - 1)).round
+
+      (start_idx..end_idx).each do |i|
+        next if i >= @original_points.length
+
+        # Get the uniformly scaled position
+        scaled_pt = @scaled_points[i]
+
+        # Calculate what the "gentler" scaled position would be
+        # (as if we used a less aggressive scale factor)
+        gentler_scale = @scale_factor + (1.0 - @scale_factor) * blend_factor
+        original_pt = @original_points[i]
+        gentler_pt = [
+          center_x + (original_pt[0] - center_x) * gentler_scale,
+          center_y + (original_pt[1] - center_y) * gentler_scale
+        ]
+
+        # Calculate blend weight based on position within segment (smooth edges)
+        seg_length = end_idx - start_idx
+        if seg_length > 0
+          dist_from_edge = [i - start_idx, end_idx - i].min.to_f
+          edge_width = [seg_length * 0.2, 5].max  # 20% of segment or 5 points
+          edge_blend = [dist_from_edge / edge_width, 1.0].min
+        else
+          edge_blend = 1.0
+        end
+
+        # Blend toward gentler position
+        @scaled_points[i] = [
+          scaled_pt[0] + (gentler_pt[0] - scaled_pt[0]) * blend_factor * edge_blend,
+          scaled_pt[1] + (gentler_pt[1] - scaled_pt[1]) * blend_factor * edge_blend
+        ]
+      end
+    end
+
+    # Recalculate curvatures after modification
+    recalculate_curvatures
+  end
+
+  def identify_segments
+    segments = []
+    window = 10
+    smoothed = smooth_curvatures_array(@original_curvatures, window)
+
+    in_straight = false
+    segment_start = 0
+
+    smoothed.each_with_index do |curv, i|
+      t_value = i.to_f / smoothed.length
+      is_straight = curv < STRAIGHT_CURVATURE_MAX
+
+      if is_straight && !in_straight
+        # Ending a curve segment, starting a straight
+        if i > 0
+          segments << {
+            t_start: segment_start,
+            t_end: t_value,
+            is_straight: false,
+            length: t_value - segment_start
+          }
+        end
+        segment_start = t_value
+        in_straight = true
+      elsif !is_straight && in_straight
+        # Ending a straight segment, starting a curve
+        segments << {
+          t_start: segment_start,
+          t_end: t_value,
+          is_straight: true,
+          length: t_value - segment_start
+        }
+        segment_start = t_value
+        in_straight = false
+      end
+    end
+
+    # Add final segment
+    segments << {
+      t_start: segment_start,
+      t_end: 1.0,
+      is_straight: in_straight,
+      length: 1.0 - segment_start
+    }
+
+    puts "  Found #{segments.count { |s| s[:is_straight] }} straight segments, #{segments.count { |s| !s[:is_straight] }} curved segments"
+    segments
+  end
+
+  def smooth_curvatures_array(curvatures, window)
+    result = []
+    curvatures.each_with_index do |_, i|
+      start_i = [i - window, 0].max
+      end_i = [i + window, curvatures.length - 1].min
+      avg = curvatures[start_i..end_i].sum / (end_i - start_i + 1).to_f
+      result << avg
+    end
+    result
+  end
+
+  def smooth_segment_transitions(segments)
+    # Apply gaussian-like smoothing at segment boundaries to avoid sharp kinks
+    transition_width = (@scaled_points.length * 0.02).to_i  # 2% of track length
+
+    segments.each do |seg|
+      # Smooth the end of each segment
+      end_idx = (seg[:t_end] * (@scaled_points.length - 1)).round
+      smooth_around_index(end_idx, transition_width)
+    end
+  end
+
+  def smooth_around_index(center_idx, width)
+    return if width < 2
+
+    start_idx = [center_idx - width, 0].max
+    end_idx = [center_idx + width, @scaled_points.length - 1].min
+
+    return if end_idx - start_idx < 3
+
+    # Simple moving average smoothing
+    original_segment = @scaled_points[start_idx..end_idx].dup
+
+    (start_idx..end_idx).each do |i|
+      local_start = [i - 2, start_idx].max
+      local_end = [i + 2, end_idx].min
+      count = local_end - local_start + 1
+
+      avg_x = (local_start..local_end).sum { |j| @scaled_points[j][0] } / count.to_f
+      avg_y = (local_start..local_end).sum { |j| @scaled_points[j][1] } / count.to_f
+
+      # Blend based on distance from center
+      dist_from_center = (i - center_idx).abs.to_f / width
+      blend = 1.0 - dist_from_center  # More smoothing near center
+
+      @scaled_points[i] = [
+        @scaled_points[i][0] * (1 - blend * 0.5) + avg_x * (blend * 0.5),
+        @scaled_points[i][1] * (1 - blend * 0.5) + avg_y * (blend * 0.5)
+      ]
+    end
+  end
+
+  #=============================================================================
+  # RADIUS ENFORCEMENT SCALING
+  #=============================================================================
+
+  def apply_radius_enforcement_scale
+    # Step 1: Apply uniform scaling first
+    apply_uniform_scale
+
+    # Step 2: Iteratively find and fix curves that are too tight
+    min_radius_svg = MIN_SCALED_RADIUS_IN * SVG_UNITS_PER_INCH
+    max_iterations = 5  # Limit iterations to prevent infinite loops
+
+    max_iterations.times do |iteration|
+      violations = find_radius_violations(min_radius_svg)
+
+      if violations.empty?
+        puts "  All curves within radius limit after #{iteration} iterations"
+        return
+      end
+
+      if iteration == 0
+        puts "  Found #{violations.length} regions with tight curves, widening..."
+      end
+
+      # Widen each violating region with increasing aggressiveness
+      aggression = 1.0 + (iteration * 0.5)  # Gets more aggressive each iteration
+      violations.each do |violation|
+        widen_curve_region(violation, min_radius_svg, aggression)
+      end
+
+      # Recalculate curvatures after modifications
+      recalculate_curvatures
+    end
+  end
+
+  def find_radius_violations(min_radius_svg)
+    violations = []
+    in_violation = false
+    violation_start = 0
+
+    @scaled_curvatures.each_with_index do |curv, i|
+      next if curv < 0.0001
+
+      radius = 1.0 / curv
+      is_violation = radius < min_radius_svg
+
+      if is_violation && !in_violation
+        violation_start = i
+        in_violation = true
+      elsif !is_violation && in_violation
+        violations << { start_idx: violation_start, end_idx: i - 1 }
+        in_violation = false
+      end
+    end
+
+    # Handle violation at end
+    if in_violation
+      violations << { start_idx: violation_start, end_idx: @scaled_curvatures.length - 1 }
+    end
+
+    # Merge nearby violations
+    merge_nearby_violations(violations, (@scaled_points.length * 0.02).to_i)
+  end
+
+  def merge_nearby_violations(violations, gap_threshold)
+    return violations if violations.length < 2
+
+    merged = [violations.first.dup]
+    violations[1..-1].each do |v|
+      if v[:start_idx] - merged.last[:end_idx] < gap_threshold
+        merged.last[:end_idx] = v[:end_idx]
+      else
+        merged << v.dup
+      end
+    end
+    merged
+  end
+
+  def widen_curve_region(violation, min_radius_svg, aggression = 1.0)
+    start_idx = violation[:start_idx]
+    end_idx = violation[:end_idx]
+
+    # Expand region for smoother transitions
+    padding = (@scaled_points.length * 0.02).to_i
+    start_idx = [start_idx - padding, 0].max
+    end_idx = [end_idx + padding, @scaled_points.length - 1].min
+
+    # Find the center of the curve (point of maximum curvature)
+    max_curv_idx = start_idx
+    max_curv = 0
+    (start_idx..end_idx).each do |i|
+      if @scaled_curvatures[i] > max_curv
+        max_curv = @scaled_curvatures[i]
+        max_curv_idx = i
+      end
+    end
+
+    # Calculate how much we need to push out the curve
+    current_radius = max_curv > 0.0001 ? 1.0 / max_curv : Float::INFINITY
+    needed_radius = min_radius_svg
+    push_distance = (needed_radius - current_radius) * aggression
+
+    return if push_distance <= 0
+
+    # Find the curve center (approximate center of curvature)
+    # Use the perpendicular to the tangent at the apex
+    apex_pt = @scaled_points[max_curv_idx]
+    apex_tangent = @scaled_tangents[max_curv_idx]
+
+    # Perpendicular direction (toward center of curve)
+    # Determine which side the center is on by looking at adjacent points
+    perp = [-apex_tangent[1], apex_tangent[0]]
+
+    # Check if we need to flip the perpendicular
+    # The center should be on the inside of the curve
+    prev_idx = [max_curv_idx - 5, start_idx].max
+    next_idx = [max_curv_idx + 5, end_idx].min
+    prev_pt = @scaled_points[prev_idx]
+    next_pt = @scaled_points[next_idx]
+
+    # Midpoint of chord
+    chord_mid = [(prev_pt[0] + next_pt[0]) / 2.0, (prev_pt[1] + next_pt[1]) / 2.0]
+
+    # Vector from apex to chord midpoint indicates direction toward center
+    to_center = [chord_mid[0] - apex_pt[0], chord_mid[1] - apex_pt[1]]
+
+    # If perpendicular points away from center, flip it
+    dot = perp[0] * to_center[0] + perp[1] * to_center[1]
+    perp = [-perp[0], -perp[1]] if dot < 0
+
+    # Push points outward (away from center) to widen the curve
+    (start_idx..end_idx).each do |i|
+      # Calculate push amount based on distance from apex (gaussian-like falloff)
+      dist_from_apex = (i - max_curv_idx).abs.to_f
+      region_half_width = (end_idx - start_idx) / 2.0
+      falloff = Math.exp(-(dist_from_apex ** 2) / (2 * (region_half_width / 2) ** 2))
+
+      push_amount = push_distance * falloff * 0.8  # Factor for adjustment strength
+
+      # Push point away from center (opposite of perp direction)
+      @scaled_points[i] = [
+        @scaled_points[i][0] - perp[0] * push_amount,
+        @scaled_points[i][1] - perp[1] * push_amount
+      ]
+    end
+  end
+
+  def recalculate_curvatures
+    # Recalculate curvatures from the modified points
+    @scaled_curvatures = []
+    @scaled_tangents = []
+
+    @scaled_points.each_with_index do |pt, i|
+      if i == 0
+        # First point: use forward difference
+        next_pt = @scaled_points[1]
+        dx = next_pt[0] - pt[0]
+        dy = next_pt[1] - pt[1]
+        len = Math.sqrt(dx * dx + dy * dy)
+        @scaled_tangents << (len > 0 ? [dx / len, dy / len] : [1, 0])
+        @scaled_curvatures << 0
+      elsif i == @scaled_points.length - 1
+        # Last point: use backward difference
+        prev_pt = @scaled_points[i - 1]
+        dx = pt[0] - prev_pt[0]
+        dy = pt[1] - prev_pt[1]
+        len = Math.sqrt(dx * dx + dy * dy)
+        @scaled_tangents << (len > 0 ? [dx / len, dy / len] : [1, 0])
+        @scaled_curvatures << 0
+      else
+        # Interior point: use central difference for tangent
+        prev_pt = @scaled_points[i - 1]
+        next_pt = @scaled_points[i + 1]
+
+        dx = next_pt[0] - prev_pt[0]
+        dy = next_pt[1] - prev_pt[1]
+        len = Math.sqrt(dx * dx + dy * dy)
+        tangent = len > 0 ? [dx / len, dy / len] : [1, 0]
+        @scaled_tangents << tangent
+
+        # Curvature from discrete points
+        # Using the formula: k = 2 * |cross(v1, v2)| / (|v1| * |v2| * |v1 + v2|)
+        v1 = [pt[0] - prev_pt[0], pt[1] - prev_pt[1]]
+        v2 = [next_pt[0] - pt[0], next_pt[1] - pt[1]]
+
+        cross = v1[0] * v2[1] - v1[1] * v2[0]
+        len1 = Math.sqrt(v1[0]**2 + v1[1]**2)
+        len2 = Math.sqrt(v2[0]**2 + v2[1]**2)
+        sum_len = Math.sqrt((v1[0] + v2[0])**2 + (v1[1] + v2[1])**2)
+
+        denom = len1 * len2 * sum_len
+        curv = denom > 0.0001 ? (2 * cross.abs / denom) : 0
+        @scaled_curvatures << curv
+      end
+    end
+  end
+end
+
+#===============================================================================
 # TRACK ANALYZER
 #===============================================================================
 
 class TrackAnalyzer
-  attr_reader :points, :curvatures, :path_length
+  attr_reader :points, :curvatures, :path_length, :scale_factor
 
   def initialize(path_data, samples_per_curve: 50)
     @path_data = path_data
@@ -239,7 +769,27 @@ class TrackAnalyzer
     @points = []
     @curvatures = []
     @tangents = []
+    @scale_factor = 1.0
     analyze
+    apply_scaling
+  end
+
+  def apply_scaling
+    return if SCALING_MODE == :none
+
+    scaler = TrackScaler.new(@points, @curvatures, @tangents)
+    @points = scaler.scaled_points
+    @curvatures = scaler.scaled_curvatures
+    @tangents = scaler.scaled_tangents
+    @scale_factor = scaler.scale_factor
+
+    # Recalculate path length with scaled points
+    @path_length = 0.0
+    (1...@points.length).each do |i|
+      dx = @points[i][0] - @points[i-1][0]
+      dy = @points[i][1] - @points[i-1][1]
+      @path_length += Math.sqrt(dx*dx + dy*dy)
+    end
   end
 
   def split_points
@@ -1063,13 +1613,31 @@ class SplitVisualizer
     split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
     label_group = %(<g id="split-labels">\n#{split_labels.join("\n")}\n</g>)
 
-    # Create ghost track if enabled (thin line for comparison)
+    # Create ghost track if enabled - shows ORIGINAL track layout scaled to match output
+    # This lets you compare the original curves vs simplified output at the same size
     ghost_track = ""
     if SHOW_GHOST_TRACK
       ghost_style = GHOST_TRACK_STYLE == 'dashed' ? 'stroke-dasharray="10,5"' : ''
-      ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}">
-<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="2" fill="none" #{ghost_style}/>
+
+      if SCALING_MODE != :none && analyzer.scale_factor != 1.0
+        # The scaled track's center = original track's center (scaling preserves center)
+        # So use the center of the current (scaled) analyzer points
+        all_x = analyzer.points.map { |p| p[0] }
+        all_y = analyzer.points.map { |p| p[1] }
+        center_x = (all_x.min + all_x.max) / 2.0
+        center_y = (all_y.min + all_y.max) / 2.0
+
+        scale = analyzer.scale_factor
+        # Transform: move to origin, scale, move back to center
+        # Since scaling preserves the center, we use the same center for both translates
+        ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}" transform="translate(#{center_x}, #{center_y}) scale(#{scale}) translate(#{-center_x}, #{-center_y})">
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="#{1.5 / scale}" fill="none" #{ghost_style}/>
 </g>)
+      else
+        ghost_track = %(<g id="ghost-track" opacity="#{GHOST_TRACK_OPACITY}">
+<path d="#{path_data}" stroke="#{GHOST_TRACK_COLOR}" stroke-width="1.5" fill="none" #{ghost_style}/>
+</g>)
+      end
     end
 
     # Create railroad-style main track with truly transparent gap using SVG mask
