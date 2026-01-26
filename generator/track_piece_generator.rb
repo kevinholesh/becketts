@@ -27,6 +27,20 @@ LEGO_CAR_LENGTH_IN = 2.959
 LEGO_CAR_WIDTH_IN = 1.254
 LEGO_CAR_HEIGHT_IN = 0.996
 
+# Test car visualization - shows car rectangles on the track
+# Uses normalized coordinates: t=0.0 is at split 1 (start/finish), increases around the lap
+# The actual track t-values are offset by START_FINISH_T internally
+TEST_CARS = [
+  { type: :premium, t: 0.02 },
+  { type: :mainline, t: 0.05 },
+  { type: :lego, t: 0.08 },
+]
+TEST_CAR_COLORS = {
+  premium:  '#00AA00',  # Green
+  mainline: '#0066CC',  # Blue
+  lego:     '#FF8800',  # Orange
+}
+TEST_CAR_OPACITY = 0.7
 
 # Track dimensions (inches)
 TRACK_WIDTH_IN = 1.6     # Lane width - enough clearance for the car
@@ -41,8 +55,8 @@ COMFORTABLE_TURN_RADIUS_IN = 5.5
 MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
 
 # Wood/CNC constraints (in inches)
-MAX_PIECE_LENGTH_IN = 11.81       # Max length of a single piece (for wood grain)
-MIN_PIECE_LENGTH_IN = 3.94        # Min length to be practical
+MAX_PIECE_LENGTH_IN = 11.12       # Max length of a single piece (for wood grain)
+MIN_PIECE_LENGTH_IN = 3.4        # Min length to be practical
 WOOD_THICKNESS_IN = 0.75          # 3/4 inch walnut
 
 #===============================================================================
@@ -74,8 +88,8 @@ CURVATURE_THRESHOLD = 0.15        # Threshold for detecting significant curves
 
 # Straight-to-curve splitting
 SPLIT_AT_STRAIGHT_END = true      # Split where straights meet curves
-STRAIGHT_CURVATURE_MAX = 0.02     # Max curvature to be considered "straight"
-MIN_STRAIGHT_LENGTH = 0.03        # Minimum length (as fraction) to qualify as a straight
+STRAIGHT_CURVATURE_MAX = 0.05     # Max curvature to be considered "straight"
+MIN_STRAIGHT_LENGTH = 0.08        # Minimum length (as fraction) to qualify as a straight
 
 # Straight piece simplification
 STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a straight line
@@ -92,39 +106,40 @@ CHICANE_MIN_REVERSALS = 2         # Minimum direction reversals to qualify as ch
 # Split 1 is always at t=0 (start/finish line), so don't include it here.
 # List remaining splits in racing order.
 
-# Reverse the direction of numbering (true = clockwise on track)
-REVERSE_DIRECTION = true
-
-# All splits after split 1, in racing direction order
-# Split 1 is automatically at START_FINISH_T (the start/finish line)
+# Track coordinate system offset - this is the raw t-value of split 1 (start/finish)
+# All user-facing t-values are normalized so t=0.0 is at split 1
 START_FINISH_T = 0.515
 
+# All splits in normalized coordinates (t=0.0 is split 1, increases in racing direction)
+# Split 1 is automatically at t=0.0
 MANUAL_SPLITS = [
-  0.475,
-  # 0.43,
-  0.40,
-  0.256,
-  0.23,
-  0.058,
-  # 0.997,
-  0.94,
-  0.91,
-  0.77,
-  0.71,
-  0.625
+  0.04,   # Split 2
+  0.115,  # Split 3
+  0.259,  # Split 4
+  0.285,  # Split 5
+  0.457,  # Split 6
+  0.575,  # Split 7
+  0.605,  # Split 8
+  0.745,  # Split 9
+  0.805,  # Split 10
+  0.89,   # Split 11
 ]
 
 # Visual settings for split preview (all dimensions in inches)
 SPLIT_LINE_COLOR = '#FF0000'
 SPLIT_LINE_WIDTH_IN = 0.1         # Thin line for precise split visualization
 SVG_PADDING_IN = 5.0              # White border padding around the SVG (inches)
-FLIP_LABEL_SPLITS = []            # Split numbers whose labels should be on opposite side
 
 # Ghost track settings - shows original track for comparison
 SHOW_GHOST_TRACK = true           # Enable ghost track overlay
 GHOST_TRACK_COLOR = '#FF0000'     # Light gray for ghost
-GHOST_TRACK_OPACITY = 0.5         # Transparency (0-1)
+GHOST_TRACK_OPACITY = 0.4         # Transparency (0-1)
 GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
+
+# Tight radius warning visualization
+SHOW_TIGHT_RADIUS_WARNINGS = true # Highlight curves that are too tight for cars
+TIGHT_RADIUS_THRESHOLD_IN = 1.5   # Warn about radii below this (inches)
+TIGHT_RADIUS_COLOR = '#FF00FF'    # Magenta for warnings
 
 # Main track visual style - "railroad" style with two rails and gap
 # NOTE: All dimensions below are in INCHES (output SVG uses 1 unit = 1 inch for CNC)
@@ -839,6 +854,55 @@ class TrackAnalyzer
     @points[start_idx..end_idx]
   end
 
+  # Find sections where the turn radius is below a threshold
+  def find_tight_radius_sections(threshold_in)
+    tight_sections = []
+    in_tight = false
+    section_start_idx = 0
+    max_curv_in_section = 0
+
+    @curvatures.each_with_index do |curv, i|
+      next if curv < 0.0001
+      radius_in = 1.0 / curv
+
+      if radius_in < threshold_in
+        if !in_tight
+          in_tight = true
+          section_start_idx = i
+          max_curv_in_section = curv
+        else
+          max_curv_in_section = [max_curv_in_section, curv].max
+        end
+      elsif in_tight
+        t_start = section_start_idx.to_f / @points.length
+        t_end = i.to_f / @points.length
+        center_idx = ((t_start + t_end) / 2.0 * (@points.length - 1)).round
+        tight_sections << {
+          t_start: t_start, t_end: t_end,
+          min_radius: 1.0 / max_curv_in_section,
+          center_point: @points[center_idx]
+        }
+        in_tight = false
+        max_curv_in_section = 0
+      end
+    end
+
+    # Merge nearby sections
+    return tight_sections if tight_sections.length < 2
+    merged = [tight_sections.first.dup]
+    tight_sections[1..-1].each do |section|
+      if section[:t_start] - merged.last[:t_end] < 0.02
+        merged.last[:t_end] = section[:t_end]
+        merged.last[:min_radius] = [merged.last[:min_radius], section[:min_radius]].min
+        center_idx = ((merged.last[:t_start] + merged.last[:t_end]) / 2.0 * (@points.length - 1)).round
+        merged.last[:center_point] = @points[center_idx]
+      else
+        merged << section.dup
+      end
+    end
+    merged
+  end
+
   # Check if a piece is "straight enough" to be simplified to a line
   def is_piece_straight?(t_start, t_end)
     start_idx = (t_start * (@curvatures.length - 1)).round
@@ -1164,13 +1228,16 @@ class SplitVisualizer
     # Analyze the track
     analyzer = TrackAnalyzer.new(path_data)
 
-    # Build splits from manual configuration
-    # Split 1 is always at START_FINISH_T
-    splits = [START_FINISH_T]
+    # Helper to convert normalized t (0.0 = split 1) to raw track t
+    # Formula: raw = (START_FINISH_T - normalized + 1.0) mod 1.0
+    normalized_to_raw = ->(norm_t) { (START_FINISH_T - norm_t + 1.0) % 1.0 }
+
+    # Build splits from manual configuration (converting from normalized to raw t)
+    # Split 1 is at normalized t=0.0, which maps to raw t=START_FINISH_T
+    splits_normalized = [0.0] + MANUAL_SPLITS
+    splits = splits_normalized.map { |norm_t| normalized_to_raw.call(norm_t) }
 
     if MANUAL_SPLITS.any?
-      # Add manual splits - they're already in racing order
-      splits += MANUAL_SPLITS
       puts "Using #{splits.length} manually configured splits"
     else
       puts "WARNING: No manual splits configured. Only split 1 (start/finish) will be shown."
@@ -1216,6 +1283,50 @@ class SplitVisualizer
       split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
 
       puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
+    end
+
+    # Generate test car visualizations anywhere on track
+    # Uses normalized coordinates where t=0.0 is at split 1 (START_FINISH_T)
+    test_car_elements = []
+    if TEST_CARS.any?
+      puts ""
+      puts "Test Cars (t=0.0 is split 1, increases around lap):"
+
+      TEST_CARS.each_with_index do |car_config, idx|
+        # Get car dimensions based on type
+        case car_config[:type]
+        when :premium
+          car_length = PREMIUM_CAR_LENGTH_IN
+          car_width = PREMIUM_CAR_WIDTH_IN
+        when :mainline
+          car_length = MAINLINE_CAR_LENGTH_IN
+          car_width = MAINLINE_CAR_WIDTH_IN
+        when :lego
+          car_length = LEGO_CAR_LENGTH_IN
+          car_width = LEGO_CAR_WIDTH_IN
+        else
+          car_length = PREMIUM_CAR_LENGTH_IN
+          car_width = PREMIUM_CAR_WIDTH_IN
+        end
+
+        # Convert normalized t (0.0 = split 1) to raw track t
+        raw_t = normalized_to_raw.call(car_config[:t])
+        car_point = analyzer.point_at(raw_t)
+        car_tangent = analyzer.tangent_at(raw_t)
+
+        # Calculate rotation angle from tangent
+        angle_rad = Math.atan2(car_tangent[1], car_tangent[0])
+        angle_deg = angle_rad * 180.0 / Math::PI
+
+        # Create rectangle centered on track, rotated to follow tangent
+        half_length = car_length / 2.0
+        half_width = car_width / 2.0
+        car_color = TEST_CAR_COLORS[car_config[:type]] || '#00AA00'
+
+        test_car_elements << %(<rect x="#{(-half_length).round(3)}" y="#{(-half_width).round(3)}" width="#{car_length.round(3)}" height="#{car_width.round(3)}" fill="#{car_color}" fill-opacity="#{TEST_CAR_OPACITY}" stroke="#{car_color}" stroke-width="0.05" transform="translate(#{car_point[0].round(3)}, #{car_point[1].round(3)}) rotate(#{angle_deg.round(2)})"/>)
+
+        puts "  Car #{idx + 1}: #{car_config[:type]} at normalized t=#{car_config[:t].round(3)} (raw t=#{raw_t.round(3)})"
+      end
     end
 
     # Generate grain direction visualization for each piece
@@ -1284,6 +1395,31 @@ class SplitVisualizer
 
         # Generate grain lines
         grain_lines << generate_grain_lines_for_piece(grain_dir, bounds, piece_pts, path_data, actual_start, actual_end)
+      end
+    end
+
+    # Find and visualize tight radius sections
+    tight_warnings = []
+    if SHOW_TIGHT_RADIUS_WARNINGS
+      tight_sections = analyzer.find_tight_radius_sections(TIGHT_RADIUS_THRESHOLD_IN)
+
+      if tight_sections.any?
+        puts ""
+        puts "TIGHT RADIUS WARNINGS (< #{TIGHT_RADIUS_THRESHOLD_IN}\" min radius):"
+        tight_sections.each_with_index do |section, i|
+          pt = section[:center_point]
+          puts "  ##{i+1}: t=#{section[:t_start].round(3)}-#{section[:t_end].round(3)}, radius=#{section[:min_radius].round(2)}\" at (#{pt[0].round(1)}, #{pt[1].round(1)})"
+
+          # Create warning circle marker
+          marker_r = 0.8
+          tight_warnings << %(<circle cx="#{pt[0].round(2)}" cy="#{pt[1].round(2)}" r="#{marker_r}" fill="none" stroke="#{TIGHT_RADIUS_COLOR}" stroke-width="0.1"/>)
+          tight_warnings << %(<text x="#{pt[0].round(2)}" y="#{(pt[1] - marker_r - 0.2).round(2)}" fill="#{TIGHT_RADIUS_COLOR}" font-size="0.5" font-family="Arial" text-anchor="middle">#{section[:min_radius].round(1)}"</text>)
+        end
+        puts ""
+        puts "  These sections need to be widened in the source SVG."
+      else
+        puts ""
+        puts "All turn radii OK (>= #{TIGHT_RADIUS_THRESHOLD_IN}\")"
       end
     end
 
@@ -1465,8 +1601,20 @@ class SplitVisualizer
     # Insert after opening <svg ...> tag (find the svg tag and insert after it)
     modified_svg = modified_svg.sub(/(<svg[^>]*>)/, "\\1\n#{insert_content}\n")
 
-    # Insert grain direction, split lines, labels, and scale bar before closing </svg>
-    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{label_group}\n#{scale_bar}\n#{dimension_lines}\n</svg>")
+    # Build tight radius warnings group
+    warnings_group = ""
+    if tight_warnings.any?
+      warnings_group = %(<g id="tight-radius-warnings">\n#{tight_warnings.join("\n")}\n</g>)
+    end
+
+    # Build test cars group
+    test_cars_group = ""
+    if test_car_elements.any?
+      test_cars_group = %(<g id="test-cars">\n#{test_car_elements.join("\n")}\n</g>)
+    end
+
+    # Insert grain direction, split lines, labels, scale bar, warnings, and test cars before closing </svg>
+    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{label_group}\n#{test_cars_group}\n#{scale_bar}\n#{dimension_lines}\n#{warnings_group}\n</svg>")
 
     File.write(@output_file, modified_svg)
 

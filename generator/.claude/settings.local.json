@@ -4,7 +4,8 @@
       "Bash(ruby track_piece_generator.rb:*)",
       "Bash(cursor:*)",
       "Bash(ruby -e:*)",
-      "Bash(ruby -c:*)"
+      "Bash(ruby -c:*)",
+      "Bash(ruby:*)"
     ]
   }
 }
