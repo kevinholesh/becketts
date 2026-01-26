@@ -3,7 +3,8 @@
     "allow": [
       "Bash(ruby track_piece_generator.rb:*)",
       "Bash(cursor:*)",
-      "Bash(ruby -e:*)"
+      "Bash(ruby -e:*)",
+      "Bash(ruby -c:*)"
     ]
   }
 }
