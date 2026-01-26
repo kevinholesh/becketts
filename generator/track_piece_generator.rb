@@ -91,10 +91,12 @@ STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a strai
 # piece number and the override method to call. The method receives start/end points
 # and returns an array of points for the new path.
 PIECE_OVERRIDES = {
-  3 => :generate_piece_3_override,  # Replace tight chicane with wider sweeping curves
+  3 => :generate_piece_3_override,   # Replace tight chicane with wider sweeping curves
+  11 => :generate_piece_11_override, # Replace 90° left with two turns (left then right)
 }
 
-
+# Show turn markers for debugging override geometry (T1, T2, etc. labels)
+SHOW_TURN_MARKERS = true
 
 #===============================================================================
 # MANUAL SPLIT CONFIGURATION
@@ -442,6 +444,97 @@ class PieceOverrideGenerator
     all_points += turn3_points[1..-1]
     current_pt = turn3_points.last
     current_dir = tangent_at_arc_end(current_dir, turn3_angle, t3_actual)
+
+    # Smooth connector to end point
+    connector_points = build_smooth_connector(
+      current_pt, current_dir, end_pt, exit_unit, 30
+    )
+
+    # Add connector
+    all_points += connector_points[1..-1]
+
+    # IMPORTANT: Reverse the points to return in raw t-order (opposite of racing direction)
+    all_points.reverse
+  end
+
+  # Piece 11 override: Replace the 90° left turn with two turns (left then right)
+  # NOTE: original_points are in raw t-order, which is OPPOSITE to racing direction
+  # Racing direction: piece 10 → piece 11 → piece 1
+  # So we need to reverse: entry is from end_pt (piece 10 side), exit is to start_pt (piece 1 side)
+  def self.generate_piece_11_override(original_points, start_pt, end_pt, entry_dir, exit_dir)
+    # REVERSE for racing direction: entry is from piece 10 (end_pt), exit is to piece 1 (start_pt)
+    racing_entry_pt = end_pt
+    racing_exit_pt = start_pt
+    racing_entry_dir = [-exit_dir[0], -exit_dir[1]]  # Reverse the exit direction
+    racing_exit_dir = [-entry_dir[0], -entry_dir[1]]  # Reverse the entry direction
+
+    # Normalize directions
+    entry_len = Math.sqrt(racing_entry_dir[0]**2 + racing_entry_dir[1]**2)
+    exit_len = Math.sqrt(racing_exit_dir[0]**2 + racing_exit_dir[1]**2)
+    entry_unit = [racing_entry_dir[0] / entry_len, racing_entry_dir[1] / entry_len]
+    exit_unit = [racing_exit_dir[0] / exit_len, racing_exit_dir[1] / exit_len]
+
+    # Use racing direction start/end
+    start_pt = racing_entry_pt
+    end_pt = racing_exit_pt
+
+    # === STRAIGHT RUNS (distance to travel before each turn) ===
+    straight1 = 0.0       # inches before turn 1
+    straight2 = 0.0       # inches before turn 2
+
+    # === TURN 1 (LEFT) ===
+    turn1_radius = 2.5       # inches
+    turn1_angle = 90          # degrees
+    turn1_direction = :left   # :left or :right (in racing direction)
+
+    # === TURN 2 (RIGHT) ===
+    turn2_radius = 2.5        # inches
+    turn2_angle = 90          # degrees
+    turn2_direction = :right  # :left or :right (in racing direction)
+
+    all_points = []
+
+    # Current position and direction
+    current_pt = start_pt
+    current_dir = entry_unit
+
+    # Straight run before Turn 1
+    if straight1 > 0
+      straight1_points = build_straight_run(current_pt, current_dir, straight1, 10)
+      all_points += straight1_points
+      current_pt = straight1_points.last
+    end
+
+    # Record Turn 1 start position
+    @turn_markers << { label: "T1", pt: current_pt.dup, dir: current_dir.dup }
+
+    # Build Turn 1 (flip direction since entry is reversed)
+    t1_actual = turn1_direction == :right ? :left : :right
+    turn1_points = build_arc_from_tangent(
+      current_pt, current_dir, turn1_radius, turn1_angle, t1_actual, 40
+    )
+    all_points += (all_points.empty? ? turn1_points : turn1_points[1..-1])
+    current_pt = turn1_points.last
+    current_dir = tangent_at_arc_end(current_dir, turn1_angle, t1_actual)
+
+    # Straight run before Turn 2
+    if straight2 > 0
+      straight2_points = build_straight_run(current_pt, current_dir, straight2, 10)
+      all_points += straight2_points[1..-1]
+      current_pt = straight2_points.last
+    end
+
+    # Record Turn 2 start position
+    @turn_markers << { label: "T2", pt: current_pt.dup, dir: current_dir.dup }
+
+    # Build Turn 2 (flip direction since entry is reversed)
+    t2_actual = turn2_direction == :right ? :left : :right
+    turn2_points = build_arc_from_tangent(
+      current_pt, current_dir, turn2_radius, turn2_angle, t2_actual, 40
+    )
+    all_points += turn2_points[1..-1]
+    current_pt = turn2_points.last
+    current_dir = tangent_at_arc_end(current_dir, turn2_angle, t2_actual)
 
     # Smooth connector to end point
     connector_points = build_smooth_connector(
@@ -2029,10 +2122,10 @@ class SplitVisualizer
       warnings_group = %(<g id="tight-radius-warnings">\n#{tight_warnings.join("\n")}\n</g>)
     end
 
-    # Build turn markers group (for piece 3 chicane visualization)
+    # Build turn markers group (for piece override visualization)
     turn_markers_group = ""
     markers = PieceOverrideGenerator.turn_markers
-    if markers && markers.any?
+    if SHOW_TURN_MARKERS && markers && markers.any?
       marker_elements = markers.map do |m|
         pt = m[:pt]
         dir = m[:dir]
