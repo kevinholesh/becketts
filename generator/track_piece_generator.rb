@@ -42,9 +42,14 @@ TEST_CAR_COLORS = {
 }
 TEST_CAR_OPACITY = 0.7
 
-# Track dimensions (inches)
-TRACK_WIDTH_IN = 1.6     # Lane width - enough clearance for the car
-WALL_HEIGHT_IN = 0.3     # Side wall height to keep cars on track
+# Track cross-section (U-shape profile, all in inches)
+# The track is a U-shaped channel: two sidewalls with the car riding in between
+INNER_TRACK_WIDTH_IN = 1.75   # Width of the channel where the car rides
+SIDEWALL_THICKNESS_IN = 0.25  # Thickness of each side wall
+SIDEWALL_HEIGHT_IN = 0.35     # Height of the side walls
+
+# Total track width = inner channel + two sidewalls
+TOTAL_TRACK_WIDTH_IN = INNER_TRACK_WIDTH_IN + (SIDEWALL_THICKNESS_IN * 2)
 
 # Turning constraints (in inches)
 # Minimum radius should be at least 1.5x car length for smooth turns
@@ -130,6 +135,11 @@ SPLIT_LINE_COLOR = '#FF0000'
 SPLIT_LINE_WIDTH_IN = 0.1         # Thin line for precise split visualization
 SVG_PADDING_IN = 5.0              # White border padding around the SVG (inches)
 
+# Display scale - multiplier for SVG width/height attributes
+# ViewBox stays in inches (for CNC), but display size is scaled up for viewing
+# 10 = 10 pixels per inch when viewed in browser
+SVG_DISPLAY_SCALE = 8
+
 # Ghost track settings - shows original track for comparison
 SHOW_GHOST_TRACK = true           # Enable ghost track overlay
 GHOST_TRACK_COLOR = '#FF0000'     # Light gray for ghost
@@ -141,11 +151,12 @@ SHOW_TIGHT_RADIUS_WARNINGS = true # Highlight curves that are too tight for cars
 TIGHT_RADIUS_THRESHOLD_IN = 1.5   # Warn about radii below this (inches)
 TIGHT_RADIUS_COLOR = '#FF00FF'    # Magenta for warnings
 
-# Main track visual style - "railroad" style with two rails and gap
+# Main track visual style - U-shaped profile representation
 # NOTE: All dimensions below are in INCHES (output SVG uses 1 unit = 1 inch for CNC)
-TRACK_OUTER_WIDTH_IN = TRACK_WIDTH_IN  # Use the track width constant (1.6")
-TRACK_RAIL_WIDTH_IN = 0.1              # Width of each rail line
-TRACK_COLOR = '#000000'                # Color of the rails
+# The track is rendered as two rails (sidewalls) with a gap (inner channel) between them
+TRACK_OUTER_WIDTH_IN = TOTAL_TRACK_WIDTH_IN  # Total width including sidewalls
+TRACK_RAIL_WIDTH_IN = SIDEWALL_THICKNESS_IN  # Each rail represents a sidewall
+TRACK_COLOR = '#000000'                      # Color of the sidewalls
 
 # Grain direction visualization
 SHOW_GRAIN_DIRECTION = true       # Show optimal grain direction for each piece
@@ -1076,11 +1087,11 @@ class SplitVisualizer
     end
 
     # Generate SVG for these grain lines with a clip path based on the piece shape
-    # Create a polygon from the piece points (track centerline expanded to track width)
+    # Create a polygon from the piece points (track centerline expanded to total track width)
     clip_path_id = "grain-clip-#{(t_start * 1000).round}-#{(t_end * 1000).round}"
 
-    # Build clip path from piece points expanded to exact track width
-    half_width = TRACK_OUTER_WIDTH_IN / 2.0
+    # Build clip path from piece points expanded to total track width (inner + sidewalls)
+    half_width = TOTAL_TRACK_WIDTH_IN / 2.0
 
     # Create outline by offsetting piece points in both perpendicular directions
     outline_points = []
@@ -1251,11 +1262,8 @@ class SplitVisualizer
     puts "  Split points found: #{splits.length}"
     puts ""
 
-    # Generate split lines with numbered labels
+    # Generate split lines (no labels on splits - labels go on pieces)
     split_lines = []
-    split_labels = []
-    label_font_size_in = 0.5
-    label_stroke_width_in = 0.15
 
     splits.each_with_index do |t, i|
       split_num = i + 1
@@ -1274,15 +1282,40 @@ class SplitVisualizer
 
       split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH_IN}"/>)
 
-      # Add numbered label centered on the split line with white background
-      label_x = point[0]
-      label_y = point[1]
+      puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
+    end
+
+    # Generate piece labels at the center of each piece (between two splits)
+    # Work in normalized coordinates where t=0.0 is split 1 and increases around the lap
+    piece_labels = []
+    label_font_size_in = 0.8
+    label_stroke_width_in = 0.25
+    label_color = '#555555'
+
+    splits_normalized.each_with_index do |norm_start, i|
+      # Next split in normalized coords (wraps to 1.0 for the last piece)
+      norm_end = if i + 1 < splits_normalized.length
+        splits_normalized[i + 1]
+      else
+        1.0  # Last piece goes from final split back to start (t=1.0 same as t=0.0)
+      end
+
+      piece_num = i + 1
+
+      # Calculate midpoint in normalized space (simple average, no wrap issues)
+      midpoint_norm = (norm_start + norm_end) / 2.0
+
+      # Convert to raw t-value for point lookup
+      midpoint_t = normalized_to_raw.call(midpoint_norm)
+
+      # Get the point at the midpoint of the piece
+      mid_point = analyzer.point_at(midpoint_t)
+      label_x = mid_point[0]
+      label_y = mid_point[1]
 
       # Text with white outline/stroke behind it for readability
-      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="#{label_stroke_width_in}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
-      split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
-
-      puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
+      piece_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="white" stroke="white" stroke-width="#{label_stroke_width_in}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="middle">#{piece_num}</text>)
+      piece_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{label_color}" font-size="#{label_font_size_in}" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="middle">#{piece_num}</text>)
     end
 
     # Generate test car visualizations anywhere on track
@@ -1450,7 +1483,7 @@ class SplitVisualizer
     # Create a background rect that covers the viewbox area
     bg_rect = %(<rect x="#{viewbox_x}" y="#{viewbox_y}" width="#{viewbox_width}" height="#{viewbox_height}" fill="white"/>)
     split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
-    label_group = %(<g id="split-labels">\n#{split_labels.join("\n")}\n</g>)
+    label_group = %(<g id="piece-labels">\n#{piece_labels.join("\n")}\n</g>)
 
     # Create ghost track if enabled - shows ORIGINAL track layout scaled to match output
     # This lets you compare the original curves vs simplified output at the same size
@@ -1479,8 +1512,9 @@ class SplitVisualizer
       end
     end
 
-    # Create railroad-style main track with truly transparent gap using SVG mask
-    inner_gap_width = TRACK_OUTER_WIDTH_IN - (TRACK_RAIL_WIDTH_IN * 2)
+    # Create U-shaped track profile: two sidewalls with inner channel between them
+    # The mask creates the channel by subtracting the inner width from the total width
+    inner_gap_width = INNER_TRACK_WIDTH_IN
 
     # Extract clip paths from grain lines (they go in <defs>)
     grain_clip_paths = []
@@ -1499,15 +1533,20 @@ class SplitVisualizer
     # We need to generate path data for each piece
     modified_path_data = build_modified_path(analyzer, splits, path_data)
 
+    # SVG mask creates the U-shape profile view:
+    # - White stroke at total width defines outer boundary
+    # - Black stroke at inner width "cuts out" the channel where the car rides
+    # - Result: two visible sidewalls with transparent channel between them
     main_track = %(<defs>
-<mask id="railroad-mask">
+<mask id="track-profile-mask">
 <path d="#{modified_path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 <path d="#{modified_path_data}" stroke="black" stroke-width="#{inner_gap_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </mask>
 #{grain_clip_paths.join("\n")}
 </defs>
-<g id="main-track">
-<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#railroad-mask)"/>
+<g id="main-track" data-inner-width="#{INNER_TRACK_WIDTH_IN}" data-sidewall-thickness="#{SIDEWALL_THICKNESS_IN}" data-sidewall-height="#{SIDEWALL_HEIGHT_IN}" data-total-width="#{TOTAL_TRACK_WIDTH_IN.round(2)}">
+<!-- Track profile: #{SIDEWALL_THICKNESS_IN}" sidewalls | #{INNER_TRACK_WIDTH_IN}" inner channel | #{SIDEWALL_THICKNESS_IN}" sidewalls = #{TOTAL_TRACK_WIDTH_IN.round(2)}" total -->
+<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#track-profile-mask)"/>
 </g>)
 
     # Create grain direction group - uses per-piece polygon clip paths
@@ -1587,9 +1626,13 @@ class SplitVisualizer
     end
 
     # Update SVG dimensions and viewBox
+    # ViewBox stays in inches (for CNC compatibility)
+    # Width/height are scaled up for comfortable viewing (SVG_DISPLAY_SCALE pixels per inch)
     modified_svg = svg_content.dup
-    modified_svg = modified_svg.sub(/width="[^"]+"/, %(width="#{padded_width.round(2)}"))
-    modified_svg = modified_svg.sub(/height="[^"]+"/, %(height="#{padded_height.round(2)}"))
+    display_width = (padded_width * SVG_DISPLAY_SCALE).round(2)
+    display_height = (padded_height * SVG_DISPLAY_SCALE).round(2)
+    modified_svg = modified_svg.sub(/width="[^"]+"/, %(width="#{display_width}"))
+    modified_svg = modified_svg.sub(/height="[^"]+"/, %(height="#{display_height}"))
     modified_svg = modified_svg.sub(/viewBox="[^"]+"/, %(viewBox="#{padded_viewbox}"))
 
     # Remove the original path element - we'll replace it with our styled tracks
@@ -1614,14 +1657,15 @@ class SplitVisualizer
     end
 
     # Insert grain direction, split lines, labels, scale bar, warnings, and test cars before closing </svg>
-    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{label_group}\n#{test_cars_group}\n#{scale_bar}\n#{dimension_lines}\n#{warnings_group}\n</svg>")
+    # Order matters for SVG layering - later elements render on top
+    modified_svg = modified_svg.sub(/<\/svg>/, "#{grain_group}\n#{split_group}\n#{test_cars_group}\n#{scale_bar}\n#{dimension_lines}\n#{warnings_group}\n#{label_group}\n</svg>")
 
     File.write(@output_file, modified_svg)
 
     puts ""
     puts "Generated #{@output_file} with #{splits.length} split indicators"
     puts ""
-    puts "Piece count estimate: #{splits.length - 1} pieces"
+    puts "Piece count: #{splits.length} pieces"
   end
 end
 

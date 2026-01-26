@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="66.85in"
+     height="45.800000000000004in"
+     viewBox="0 0 66.85 45.800000000000004">
+<style>
+  .channel { fill: #333333; stroke: none; }
+  .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; }
+  .column-label { font-family: Arial, sans-serif; font-size: 0.25px; fill: #000; font-weight: bold; }
+  .note { font-family: Arial, sans-serif; font-size: 0.2px; fill: #666; }
+  .calibration { fill: none; stroke: #000000; stroke-width: 0.02; }
+  .calibration-label { font-family: Arial, sans-serif; font-size: 0.12px; fill: #000; }
+</style>
+<rect width="100%" height="100%" fill="white" />
+<path d="M 8.1250 16.4000 A 7.8750 7.8750 0 1 1 8.1250 0.6500 L 8.1250 2.4000 A 6.1250 6.1250 0 1 0 8.1250 14.6500 Z" class="channel" />
+<text x="8.2750" y="8.5850" class="label">R7.0"</text>
+<path d="M 8.1250 13.9000 A 5.3750 5.3750 0 1 1 8.1250 3.1500 L 8.1250 4.9000 A 3.6250 3.6250 0 1 0 8.1250 12.1500 Z" class="channel" />
+<text x="8.2750" y="8.5850" class="label">R4.5"</text>
+<path d="M 8.1250 31.4000 A 6.3750 6.3750 0 1 1 8.1250 18.6500 L 8.1250 20.4000 A 4.6250 4.6250 0 1 0 8.1250 29.6500 Z" class="channel" />
+<text x="8.2750" y="25.0850" class="label">R5.5"</text>
+<path d="M 8.1250 29.4000 A 4.3750 4.3750 0 1 1 8.1250 20.6500 L 8.1250 22.4000 A 2.6250 2.6250 0 1 0 8.1250 27.6500 Z" class="channel" />
+<text x="8.2750" y="25.0850" class="label">R3.5"</text>
+<path d="M 24.1750 16.5000 A 7.9250 7.9250 0 1 1 24.1750 0.6500 L 24.1750 2.5000 A 6.0750 6.0750 0 1 0 24.1750 14.6500 Z" class="channel" />
+<text x="24.3250" y="8.6350" class="label">R7.0"</text>
+<path d="M 24.1750 14.0000 A 5.4250 5.4250 0 1 1 24.1750 3.1500 L 24.1750 5.0000 A 3.5750 3.5750 0 1 0 24.1750 12.1500 Z" class="channel" />
+<text x="24.3250" y="8.6350" class="label">R4.5"</text>
+<path d="M 24.1750 31.6000 A 6.4250 6.4250 0 1 1 24.1750 18.7500 L 24.1750 20.6000 A 4.5750 4.5750 0 1 0 24.1750 29.7500 Z" class="channel" />
+<text x="24.3250" y="25.2350" class="label">R5.5"</text>
+<path d="M 24.1750 29.6000 A 4.4250 4.4250 0 1 1 24.1750 20.7500 L 24.1750 22.6000 A 2.5750 2.5750 0 1 0 24.1750 27.7500 Z" class="channel" />
+<text x="24.3250" y="25.2350" class="label">R3.5"</text>
+<path d="M 40.3250 16.6000 A 7.9750 7.9750 0 1 1 40.3250 0.6500 L 40.3250 2.6000 A 6.0250 6.0250 0 1 0 40.3250 14.6500 Z" class="channel" />
+<text x="40.4750" y="8.6850" class="label">R7.0"</text>
+<path d="M 40.3250 14.1000 A 5.4750 5.4750 0 1 1 40.3250 3.1500 L 40.3250 5.1000 A 3.5250 3.5250 0 1 0 40.3250 12.1500 Z" class="channel" />
+<text x="40.4750" y="8.6850" class="label">R4.5"</text>
+<path d="M 40.3250 31.8000 A 6.4750 6.4750 0 1 1 40.3250 18.8500 L 40.3250 20.8000 A 4.5250 4.5250 0 1 0 40.3250 29.8500 Z" class="channel" />
+<text x="40.4750" y="25.3850" class="label">R5.5"</text>
+<path d="M 40.3250 43.5000 A 4.4750 4.4750 0 1 1 40.3250 34.5500 L 40.3250 36.5000 A 2.5250 2.5250 0 1 0 40.3250 41.5500 Z" class="channel" />
+<text x="40.4750" y="39.0850" class="label">R3.5"</text>
+<path d="M 56.5750 16.7000 A 8.0250 8.0250 0 1 1 56.5750 0.6500 L 56.5750 2.7000 A 5.9750 5.9750 0 1 0 56.5750 14.6500 Z" class="channel" />
+<text x="56.7250" y="8.7350" class="label">R7.0"</text>
+<path d="M 56.5750 14.2000 A 5.5250 5.5250 0 1 1 56.5750 3.1500 L 56.5750 5.2000 A 3.4750 3.4750 0 1 0 56.5750 12.1500 Z" class="channel" />
+<text x="56.7250" y="8.7350" class="label">R4.5"</text>
+<path d="M 56.5750 32.0000 A 6.5250 6.5250 0 1 1 56.5750 18.9500 L 56.5750 21.0000 A 4.4750 4.4750 0 1 0 56.5750 29.9500 Z" class="channel" />
+<text x="56.7250" y="25.5350" class="label">R5.5"</text>
+<path d="M 56.5750 43.8000 A 4.5250 4.5250 0 1 1 56.5750 34.7500 L 56.5750 36.8000 A 2.4750 2.4750 0 1 0 56.5750 41.7500 Z" class="channel" />
+<text x="56.7250" y="39.3350" class="label">R3.5"</text>
+<text x="8.2750" y="0.5000" class="column-label" text-anchor="middle">W=1.75"</text>
+<text x="24.5750" y="0.5000" class="column-label" text-anchor="middle">W=1.85"</text>
+<text x="40.8750" y="0.5000" class="column-label" text-anchor="middle">W=1.95"</text>
+<text x="57.1750" y="0.5000" class="column-label" text-anchor="middle">W=2.05"</text>
+<rect x="65.3500" y="44.0000" width="1" height="1" class="calibration" />
+<text x="65.8500" y="43.9000" class="calibration-label" text-anchor="middle">1" × 1"</text>
+<text x="65.8500" y="45.2000" class="calibration-label" text-anchor="middle">calibration</text>
+
+<text x="0.25" y="45.75000000000001" class="note">Cut depth: 0.375"</text>
+</svg>
