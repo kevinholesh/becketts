@@ -12,14 +12,25 @@
 INPUT_FILE = 'silverstone.svg'
 OUTPUT_FILE = 'silverstone-split.svg'
 
-# Hot Wheels Premium F1 car dimensions (in mm)
-CAR_LENGTH_MM = 76.0      # ~3 inches
-CAR_WIDTH_MM = 32.0       # ~1.25 inches
-CAR_HEIGHT_MM = 20.0      # ~0.8 inches
+# Hot Wheels Premium F1 car dimensions (inches)
+PREMIUM_CAR_LENGTH_IN = 3.47
+PREMIUM_CAR_WIDTH_IN = 1.2225
+PREMIUM_CAR_HEIGHT_IN = 0.69
 
-# Track dimensions (in mm)
-TRACK_WIDTH_MM = 60.0     # Lane width - enough clearance for the car
-WALL_HEIGHT_MM = 10.0     # Side wall height to keep cars on track
+# Hot Wheels mainline car dimensions (inches)
+MAINLINE_CAR_LENGTH_IN = 3.159
+MAINLINE_CAR_WIDTH_IN = 1.188
+MAINLINE_CAR_HEIGHT_IN = 0.708
+
+# LEGO car dimensions (inches)
+LEGO_CAR_LENGTH_IN = 2.959
+LEGO_CAR_WIDTH_IN = 1.254
+LEGO_CAR_HEIGHT_IN = 0.996
+
+
+# Track dimensions (inches)
+TRACK_WIDTH_IN = 1.6     # Lane width - enough clearance for the car
+WALL_HEIGHT_IN = 0.3     # Side wall height to keep cars on track
 
 # Turning constraints (in mm)
 # Minimum radius should be at least 1.5x car length for smooth turns
@@ -75,9 +86,16 @@ MANUAL_SPLITS = [
   0.40,
   0.256,
   0.23,
-  0.185
-  # Add your split t-values here in racing order
-  # Example: 0.55, 0.60, 0.70, ... (continuing from split 1 in racing direction)
+  0.058,
+  0.997,
+  0.94,
+  0.91,
+  0.77,
+  0.71,
+
+
+  0.625
+
 ]
 
 # Visual settings for split preview
@@ -85,6 +103,7 @@ SPLIT_LINE_COLOR = '#FF0000'
 SPLIT_LINE_WIDTH = 2.0
 SPLIT_LINE_LENGTH = 30.0          # Length of split indicator lines
 SVG_PADDING = 60.0                # White border padding around the SVG
+FLIP_LABEL_SPLITS = []            # Split numbers whose labels should be on opposite side
 
 # Ghost track settings - shows original track for comparison
 SHOW_GHOST_TRACK = true           # Enable ghost track overlay
@@ -973,8 +992,10 @@ class SplitVisualizer
 
       # Add numbered label offset from the split line
       label_offset = half_len + 12  # Position label beyond the split line
-      label_x = point[0] + perp[0] * label_offset
-      label_y = point[1] + perp[1] * label_offset
+      # Flip label to opposite side if specified
+      label_side = FLIP_LABEL_SPLITS.include?(split_num) ? -1 : 1
+      label_x = point[0] + perp[0] * label_offset * label_side
+      label_y = point[1] + perp[1] * label_offset * label_side
 
       split_labels << %(<text x="#{label_x.round(2)}" y="#{label_y.round(2)}" fill="#{SPLIT_LINE_COLOR}" font-size="8" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">#{split_num}</text>)
 
@@ -993,26 +1014,17 @@ class SplitVisualizer
         t2 = splits[(i + 1) % splits.length]
 
         # Determine actual t_start and t_end for the track segment
-        # In reverse mode, piece goes from t1 backwards to t2
-        # We need to figure out which segment of the track this represents
+        # Simply use the smaller t as start and larger as end
+        # Handle wrap-around only when the gap is more than half the track
+        t_low = [t1, t2].min
+        t_high = [t1, t2].max
 
-        if REVERSE_DIRECTION
-          if t1 > t2
-            # Normal case in reverse: t1=0.5, t2=0.4 means segment from 0.4 to 0.5
-            actual_start, actual_end = t2, t1
-          else
-            # Wrap-around case: t1=0.0, t2=0.958 means we go from 0.0 backwards
-            # which wraps to 1.0 and goes down to 0.958
-            # So the actual segment is from t2 to 1.0 (the small piece at the end)
-            actual_start, actual_end = t2, 1.0
-          end
+        if (t_high - t_low) > 0.5
+          # Wrap-around case: piece goes from t_high to 1.0 and 0.0 to t_low
+          # For grain calculation, just use the larger segment
+          actual_start, actual_end = t_high, 1.0
         else
-          if t1 < t2
-            actual_start, actual_end = t1, t2
-          else
-            # Wrap-around in forward direction
-            actual_start, actual_end = t1, 1.0
-          end
+          actual_start, actual_end = t_low, t_high
         end
 
         grain_dir = analyzer.optimal_grain_direction(actual_start, actual_end)
@@ -1212,14 +1224,6 @@ end
 
 visualizer = SplitVisualizer.new(INPUT_FILE, OUTPUT_FILE)
 visualizer.generate
-
-puts ""
-puts "Configuration Summary:"
-puts "  Car dimensions: #{CAR_LENGTH_MM}mm x #{CAR_WIDTH_MM}mm"
-puts "  Track width: #{TRACK_WIDTH_MM}mm"
-puts "  Min turn radius: #{MIN_TURN_RADIUS_MM}mm"
-puts "  Max piece length: #{MAX_PIECE_LENGTH_MM}mm"
-puts "  Max assembled size: #{MAX_TRACK_DIMENSION_MM}mm (#{(MAX_TRACK_DIMENSION_MM / 25.4).round(1)} inches)"
 
 puts ""
 print 'Opening in Cursor...'
