@@ -6,7 +6,8 @@
       "Bash(ruby -e:*)",
       "Bash(ruby -c:*)",
       "Bash(ruby:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(open:*)"
     ]
   }
 }

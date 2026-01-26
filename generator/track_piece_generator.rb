@@ -86,6 +86,14 @@ TARGET_MAX_DIMENSION_IN = MAX_TRACK_DIMENSION_IN
 # Straight piece simplification
 STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a straight line
 
+# Piece geometry overrides
+# For pieces that need custom geometry (like smoothing a tight chicane), specify the
+# piece number and the override method to call. The method receives start/end points
+# and returns an array of points for the new path.
+PIECE_OVERRIDES = {
+  3 => :generate_piece_3_override,  # Replace tight chicane with wider sweeping curves
+}
+
 
 
 #===============================================================================
@@ -104,7 +112,7 @@ START_FINISH_T = 0.515
 MANUAL_SPLITS = [
   0.04,   # Split 2
   0.115,  # Split 3
-  0.259,  # Split 4
+  0.261,  # Split 4
   0.285,  # Split 5
   0.457,  # Split 6
   0.56,  # Split 7
@@ -139,13 +147,13 @@ EDIT_PATH_WIDTH_IN = 0.5         # Thicker line for visibility
 EDIT_PATH_OPACITY = 0.3          # Full opacity for editing
 
 # Rendering toggles - disable to focus on path editing
-SHOW_SIDEWALLS = true            # Render the U-shaped track profile
+SHOW_SIDEWALLS = false            # Render the U-shaped track profile
 SHOW_TEST_CARS = false            # Render test car visualizations
 SHOW_WOOD_GRAIN = false           # Render grain direction lines
 
 # Tight radius warning visualization
 SHOW_TIGHT_RADIUS_WARNINGS = false # Highlight curves that are too tight for cars
-TIGHT_RADIUS_THRESHOLD_IN = 1.5   # Warn about radii below this (inches)
+TIGHT_RADIUS_THRESHOLD_IN = 2   # Warn about radii below this (inches)
 TIGHT_RADIUS_COLOR = '#FF00FF'    # Magenta for warnings
 
 # Main track visual style - U-shaped profile representation
@@ -228,6 +236,354 @@ end
 #===============================================================================
 # BEZIER CURVE UTILITIES
 #===============================================================================
+
+#===============================================================================
+# PIECE OVERRIDE GENERATORS
+#===============================================================================
+
+class PieceOverrideGenerator
+  # Generate a circular arc from start_pt to end_pt with given radius
+  # direction: :left or :right (which way the arc curves)
+  # Returns array of points along the arc
+  def self.generate_arc(start_pt, end_pt, radius, direction, num_points = 50)
+    # Vector from start to end
+    dx = end_pt[0] - start_pt[0]
+    dy = end_pt[1] - start_pt[1]
+    chord_len = Math.sqrt(dx**2 + dy**2)
+
+    # If radius is too small for the chord, use minimum viable radius
+    min_radius = chord_len / 2.0
+    radius = [radius, min_radius + 0.1].max
+
+    # Find the center of the arc
+    # The center lies perpendicular to the chord midpoint
+    mid_x = (start_pt[0] + end_pt[0]) / 2.0
+    mid_y = (start_pt[1] + end_pt[1]) / 2.0
+
+    # Distance from chord midpoint to arc center
+    h = Math.sqrt(radius**2 - (chord_len/2.0)**2)
+
+    # Perpendicular unit vector to chord
+    perp_x = -dy / chord_len
+    perp_y = dx / chord_len
+
+    # Center position depends on direction
+    if direction == :left
+      cx = mid_x + perp_x * h
+      cy = mid_y + perp_y * h
+    else
+      cx = mid_x - perp_x * h
+      cy = mid_y - perp_y * h
+    end
+
+    # Angles from center to start and end
+    start_angle = Math.atan2(start_pt[1] - cy, start_pt[0] - cx)
+    end_angle = Math.atan2(end_pt[1] - cy, end_pt[0] - cx)
+
+    # Ensure we go the right direction around the arc
+    if direction == :left
+      end_angle += 2 * Math::PI while end_angle < start_angle
+    else
+      end_angle -= 2 * Math::PI while end_angle > start_angle
+    end
+
+    # Generate points along the arc
+    points = []
+    num_points.times do |i|
+      t = i.to_f / (num_points - 1)
+      angle = start_angle + t * (end_angle - start_angle)
+      x = cx + radius * Math.cos(angle)
+      y = cy + radius * Math.sin(angle)
+      points << [x, y]
+    end
+
+    points
+  end
+
+  # Generate a smooth S-curve (two connected arcs) from start to end
+  # radius1, radius2: radii of the two arcs
+  # split_ratio: where to split between arcs (0.0-1.0)
+  def self.generate_s_curve(start_pt, end_pt, radius1, radius2, direction1, split_ratio = 0.5, num_points = 100)
+    # Find an intermediate point for the two arcs to meet
+    # This is approximate - we'll iterate to find a good connection point
+    dx = end_pt[0] - start_pt[0]
+    dy = end_pt[1] - start_pt[1]
+
+    # Intermediate point along the direct line, offset perpendicular
+    mid_t = split_ratio
+    mid_base_x = start_pt[0] + dx * mid_t
+    mid_base_y = start_pt[1] + dy * mid_t
+
+    # The actual midpoint will be where the two arcs meet tangentially
+    # For simplicity, use the base midpoint
+    mid_pt = [mid_base_x, mid_base_y]
+
+    direction2 = direction1 == :left ? :right : :left
+
+    arc1 = generate_arc(start_pt, mid_pt, radius1, direction1, num_points / 2)
+    arc2 = generate_arc(mid_pt, end_pt, radius2, direction2, num_points / 2)
+
+    # Combine, removing duplicate midpoint
+    arc1[0..-2] + arc2
+  end
+
+  # Piece 3 override: Build chicane from scratch, turn by turn
+  # Turn 1: Sharp right
+  # Turn 2: Sharp left
+  # Turn 3: Gradual left (to exit)
+  def self.generate_piece_3_override(original_points, start_pt, end_pt, entry_dir, exit_dir)
+    # Normalize entry and exit directions
+    entry_len = Math.sqrt(entry_dir[0]**2 + entry_dir[1]**2)
+    exit_len = Math.sqrt(exit_dir[0]**2 + exit_dir[1]**2)
+    entry_unit = [entry_dir[0] / entry_len, entry_dir[1] / entry_len]
+    exit_unit = [exit_dir[0] / exit_len, exit_dir[1] / exit_len]
+
+    # === TURN 1: Sharp right ===
+    turn1_radius = 3.0    # inches
+    turn1_angle = 90      # degrees
+
+    # === TURN 2: Sharp left ===
+    turn2_radius = 3.0    # inches
+    turn2_angle = 90      # degrees
+
+    # === TURN 3: Gradual left (to exit) ===
+    turn3_radius = 1.5    # inches
+    turn3_angle = 30      # degrees
+
+    # Build Turn 1
+    turn1_points = build_arc_from_tangent(
+      start_pt, entry_unit, turn1_radius, turn1_angle, :right, 40
+    )
+    turn1_end = turn1_points.last
+    turn1_end_dir = tangent_at_arc_end(entry_unit, turn1_angle, :right)
+
+    # Build Turn 2
+    turn2_points = build_arc_from_tangent(
+      turn1_end, turn1_end_dir, turn2_radius, turn2_angle, :left, 50
+    )
+    turn2_end = turn2_points.last
+    turn2_end_dir = tangent_at_arc_end(turn1_end_dir, turn2_angle, :left)
+
+    # Build Turn 3
+    turn3_points = build_arc_from_tangent(
+      turn2_end, turn2_end_dir, turn3_radius, turn3_angle, :left, 50
+    )
+    turn3_end = turn3_points.last
+    turn3_end_dir = tangent_at_arc_end(turn2_end_dir, turn3_angle, :left)
+
+    # Smooth connector to end point
+    connector_points = build_smooth_connector(
+      turn3_end, turn3_end_dir, end_pt, exit_unit, 30
+    )
+
+    # Combine all segments
+    turn1_points + turn2_points[1..-1] + turn3_points[1..-1] + connector_points[1..-1]
+  end
+
+  # Build an arc starting at a point with given tangent direction
+  def self.build_arc_from_tangent(start_pt, tangent_dir, radius, angle_degrees, direction, num_points)
+    angle_rad = angle_degrees * Math::PI / 180.0
+
+    # Perpendicular to tangent (points toward arc center)
+    perp = if direction == :right
+      [tangent_dir[1], -tangent_dir[0]]  # 90° clockwise
+    else
+      [-tangent_dir[1], tangent_dir[0]]  # 90° counter-clockwise
+    end
+
+    # Arc center
+    cx = start_pt[0] + perp[0] * radius
+    cy = start_pt[1] + perp[1] * radius
+
+    # Starting angle (from center to start point)
+    start_angle = Math.atan2(start_pt[1] - cy, start_pt[0] - cx)
+
+    # End angle depends on direction
+    end_angle = if direction == :right
+      start_angle - angle_rad  # Clockwise
+    else
+      start_angle + angle_rad  # Counter-clockwise
+    end
+
+    # Generate arc points
+    points = []
+    num_points.times do |i|
+      t = i.to_f / (num_points - 1)
+      angle = start_angle + t * (end_angle - start_angle)
+      points << [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)]
+    end
+    points
+  end
+
+  # Calculate tangent direction at end of an arc
+  def self.tangent_at_arc_end(initial_tangent, angle_degrees, direction)
+    angle_rad = angle_degrees * Math::PI / 180.0
+    angle_rad = -angle_rad if direction == :right
+
+    cos_a = Math.cos(angle_rad)
+    sin_a = Math.sin(angle_rad)
+
+    [
+      initial_tangent[0] * cos_a - initial_tangent[1] * sin_a,
+      initial_tangent[0] * sin_a + initial_tangent[1] * cos_a
+    ]
+  end
+
+  # Build a smooth bezier connector between two points with specified tangents
+  def self.build_smooth_connector(start_pt, start_dir, end_pt, end_dir, num_points)
+    dist = Math.sqrt((end_pt[0] - start_pt[0])**2 + (end_pt[1] - start_pt[1])**2)
+    ctrl_dist = dist * 0.4
+
+    p0 = start_pt
+    p1 = [start_pt[0] + start_dir[0] * ctrl_dist, start_pt[1] + start_dir[1] * ctrl_dist]
+    p2 = [end_pt[0] - end_dir[0] * ctrl_dist, end_pt[1] - end_dir[1] * ctrl_dist]
+    p3 = end_pt
+
+    points = []
+    num_points.times do |i|
+      t = i.to_f / (num_points - 1)
+      points << BezierCurve.cubic_point(p0, p1, p2, p3, t)
+    end
+    points
+  end
+
+  # Generate a Catmull-Rom spline through control points
+  # Unlike Bezier, this passes through ALL control points
+  def self.catmull_rom_spline(control_points, total_points)
+    return control_points if control_points.length < 4
+
+    points = []
+    n = control_points.length
+
+    # Add phantom points at start and end for the spline
+    # (extrapolate from first/last two points)
+    p_start = [
+      2 * control_points[0][0] - control_points[1][0],
+      2 * control_points[0][1] - control_points[1][1]
+    ]
+    p_end = [
+      2 * control_points[n-1][0] - control_points[n-2][0],
+      2 * control_points[n-1][1] - control_points[n-2][1]
+    ]
+
+    extended = [p_start] + control_points + [p_end]
+
+    # Points per segment
+    segments = n - 1
+    points_per_segment = (total_points.to_f / segments).ceil
+
+    # Generate spline through each segment
+    (0...segments).each do |seg|
+      p0 = extended[seg]
+      p1 = extended[seg + 1]
+      p2 = extended[seg + 2]
+      p3 = extended[seg + 3]
+
+      num_pts = (seg == segments - 1) ? points_per_segment : points_per_segment - 1
+
+      num_pts.times do |i|
+        t = i.to_f / (points_per_segment - 1)
+        pt = catmull_rom_point(p0, p1, p2, p3, t)
+        points << pt
+      end
+    end
+
+    # Ensure we end exactly at the last control point
+    points[-1] = control_points.last
+
+    points
+  end
+
+  # Evaluate Catmull-Rom spline at parameter t
+  def self.catmull_rom_point(p0, p1, p2, p3, t)
+    t2 = t * t
+    t3 = t2 * t
+
+    # Catmull-Rom basis matrix (tension = 0.5)
+    x = 0.5 * (
+      (2 * p1[0]) +
+      (-p0[0] + p2[0]) * t +
+      (2*p0[0] - 5*p1[0] + 4*p2[0] - p3[0]) * t2 +
+      (-p0[0] + 3*p1[0] - 3*p2[0] + p3[0]) * t3
+    )
+
+    y = 0.5 * (
+      (2 * p1[1]) +
+      (-p0[1] + p2[1]) * t +
+      (2*p0[1] - 5*p1[1] + 4*p2[1] - p3[1]) * t2 +
+      (-p0[1] + 3*p1[1] - 3*p2[1] + p3[1]) * t3
+    )
+
+    [x, y]
+  end
+
+  # Find tight radius sections from piece_data points (the modified/edit path)
+  # Returns array of { min_radius:, center_point: }
+  def self.find_tight_sections_in_piece_data(piece_data, threshold_in)
+    tight_sections = []
+
+    piece_data.each do |pd|
+      points = pd[:points]
+      next if points.length < 3
+
+      # Calculate curvature at each interior point
+      (1...points.length - 1).each do |i|
+        prev_pt = points[i - 1]
+        pt = points[i]
+        next_pt = points[i + 1]
+
+        # Calculate curvature using the formula: |cross product| / |v1| * |v2| * |sum|
+        v1 = [pt[0] - prev_pt[0], pt[1] - prev_pt[1]]
+        v2 = [next_pt[0] - pt[0], next_pt[1] - pt[1]]
+
+        cross = v1[0] * v2[1] - v1[1] * v2[0]
+        len1 = Math.sqrt(v1[0]**2 + v1[1]**2)
+        len2 = Math.sqrt(v2[0]**2 + v2[1]**2)
+
+        next if len1 < 0.001 || len2 < 0.001
+
+        # Menger curvature formula
+        area = cross.abs / 2.0
+        side_c = Math.sqrt((next_pt[0] - prev_pt[0])**2 + (next_pt[1] - prev_pt[1])**2)
+        next if side_c < 0.001
+
+        curvature = 4.0 * area / (len1 * len2 * side_c)
+        next if curvature < 0.001
+
+        radius = 1.0 / curvature
+
+        if radius < threshold_in
+          tight_sections << { min_radius: radius, center_point: pt, piece_num: pd[:piece_num] }
+        end
+      end
+    end
+
+    # Merge nearby points into single warnings (within 1 inch)
+    return [] if tight_sections.empty?
+
+    merged = []
+    tight_sections.sort_by { |s| [s[:center_point][0], s[:center_point][1]] }.each do |section|
+      # Check if close to an existing merged section
+      found = merged.find do |m|
+        dx = m[:center_point][0] - section[:center_point][0]
+        dy = m[:center_point][1] - section[:center_point][1]
+        Math.sqrt(dx**2 + dy**2) < 1.5
+      end
+
+      if found
+        # Update if this is tighter
+        if section[:min_radius] < found[:min_radius]
+          found[:min_radius] = section[:min_radius]
+          found[:center_point] = section[:center_point]
+        end
+      else
+        merged << section.dup
+      end
+    end
+
+    merged
+  end
+end
 
 class BezierCurve
   # Evaluate cubic bezier at parameter t (0..1)
@@ -916,9 +1272,33 @@ class SplitVisualizer
         path_commands << "L #{end_point[0].round(3)} #{end_point[1].round(3)}"
         straightened_pieces << [t_start, t_end, piece_num]
         piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: [analyzer.point_at(t_start), end_point] }
+      elsif PIECE_OVERRIDES.key?(piece_num)
+        # Apply custom geometry override for this piece
+        original_pts = analyzer.piece_points(t_start, t_end)
+        start_pt = original_pts.first
+        end_pt = original_pts.last
+
+        # Calculate entry and exit directions from original path
+        entry_dir = [original_pts[1][0] - original_pts[0][0], original_pts[1][1] - original_pts[0][1]]
+        exit_dir = [original_pts[-1][0] - original_pts[-2][0], original_pts[-1][1] - original_pts[-2][1]]
+
+        # Call the override generator
+        override_method = PIECE_OVERRIDES[piece_num]
+        piece_pts = PieceOverrideGenerator.send(override_method, original_pts, start_pt, end_pt, entry_dir, exit_dir)
+
+        @overridden_pieces ||= []
+        @overridden_pieces << [piece_num, original_pts.length, piece_pts.length]
+
+        piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: piece_pts }
+
+        # Skip the first point (it's the end of the previous segment)
+        piece_pts[1..-1].each do |pt|
+          path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+        end
       else
         # Use the original curve points as a polyline
         piece_pts = analyzer.piece_points(t_start, t_end)
+
         piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: piece_pts }
 
         # Skip the first point (it's the end of the previous segment)
@@ -937,6 +1317,15 @@ class SplitVisualizer
       puts "Straightened Pieces:"
       straightened_pieces.each do |t_start, t_end, piece_num|
         puts "  Piece #{piece_num}: t=#{t_start.round(3)} to #{t_end.round(3)} -> straightened"
+      end
+    end
+
+    # Report overridden pieces
+    if @overridden_pieces && @overridden_pieces.any?
+      puts ""
+      puts "Overridden Pieces (custom geometry):"
+      @overridden_pieces.each do |piece_num, orig_count, new_count|
+        puts "  Piece #{piece_num}: #{orig_count} -> #{new_count} points (smooth curve override)"
       end
     end
 
@@ -1304,30 +1693,8 @@ class SplitVisualizer
       end
     end
 
-    # Find and visualize tight radius sections
+    # Tight radius warnings will be calculated later from piece_data (the modified/edit path)
     tight_warnings = []
-    if SHOW_TIGHT_RADIUS_WARNINGS
-      tight_sections = analyzer.find_tight_radius_sections(TIGHT_RADIUS_THRESHOLD_IN)
-
-      if tight_sections.any?
-        puts ""
-        puts "TIGHT RADIUS WARNINGS (< #{TIGHT_RADIUS_THRESHOLD_IN}\" min radius):"
-        tight_sections.each_with_index do |section, i|
-          pt = section[:center_point]
-          puts "  ##{i+1}: t=#{section[:t_start].round(3)}-#{section[:t_end].round(3)}, radius=#{section[:min_radius].round(2)}\" at (#{pt[0].round(1)}, #{pt[1].round(1)})"
-
-          # Create warning circle marker
-          marker_r = 0.8
-          tight_warnings << %(<circle cx="#{pt[0].round(2)}" cy="#{pt[1].round(2)}" r="#{marker_r}" fill="none" stroke="#{TIGHT_RADIUS_COLOR}" stroke-width="0.1"/>)
-          tight_warnings << %(<text x="#{pt[0].round(2)}" y="#{(pt[1] - marker_r - 0.2).round(2)}" fill="#{TIGHT_RADIUS_COLOR}" font-size="0.5" font-family="Arial" text-anchor="middle">#{section[:min_radius].round(1)}"</text>)
-        end
-        puts ""
-        puts "  These sections need to be widened in the source SVG."
-      else
-        puts ""
-        puts "All turn radii OK (>= #{TIGHT_RADIUS_THRESHOLD_IN}\")"
-      end
-    end
 
     # Calculate dimensions from actual track bounds (not original SVG)
     track_all_x = analyzer.points.map { |p| p[0] }
@@ -1426,6 +1793,27 @@ class SplitVisualizer
     path_result = build_modified_path(analyzer, splits, path_data, splits_normalized)
     modified_path_data = path_result[:path]
     piece_data = path_result[:piece_data]
+
+    # Find and visualize tight radius sections on the EDIT PATH (modified path)
+    if SHOW_TIGHT_RADIUS_WARNINGS
+      tight_sections = PieceOverrideGenerator.find_tight_sections_in_piece_data(piece_data, TIGHT_RADIUS_THRESHOLD_IN)
+
+      if tight_sections.any?
+        puts ""
+        puts "TIGHT RADIUS WARNINGS on edit path (< #{TIGHT_RADIUS_THRESHOLD_IN}\" min radius):"
+        tight_sections.each_with_index do |section, i|
+          pt = section[:center_point]
+          puts "  ##{i+1}: piece #{section[:piece_num]}, radius=#{section[:min_radius].round(2)}\" at (#{pt[0].round(1)}, #{pt[1].round(1)})"
+
+          marker_r = 0.8
+          tight_warnings << %(<circle cx="#{pt[0].round(2)}" cy="#{pt[1].round(2)}" r="#{marker_r}" fill="none" stroke="#{TIGHT_RADIUS_COLOR}" stroke-width="0.1"/>)
+          tight_warnings << %(<text x="#{pt[0].round(2)}" y="#{(pt[1] - marker_r - 0.2).round(2)}" fill="#{TIGHT_RADIUS_COLOR}" font-size="0.5" font-family="Arial" text-anchor="middle">#{section[:min_radius].round(1)}"</text>)
+        end
+      else
+        puts ""
+        puts "All turn radii on edit path OK (>= #{TIGHT_RADIUS_THRESHOLD_IN}\")"
+      end
+    end
 
     # Create edit path - the blue centerline for curve editing
     # This shows the OUTPUT path (after straightening/smoothing) that will be used for sidewalls
