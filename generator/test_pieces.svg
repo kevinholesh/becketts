@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
-     width="66.85in"
-     height="45.800000000000004in"
-     viewBox="0 0 66.85 45.800000000000004">
+     width="27.900000000000002in"
+     height="64.75in"
+     viewBox="0 0 27.900000000000002 64.75">
 <style>
   .channel { fill: #333333; stroke: none; }
   .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; }
@@ -12,45 +12,87 @@
   .calibration-label { font-family: Arial, sans-serif; font-size: 0.12px; fill: #000; }
 </style>
 <rect width="100%" height="100%" fill="white" />
-<path d="M 8.1250 16.4000 A 7.8750 7.8750 0 1 1 8.1250 0.6500 L 8.1250 2.4000 A 6.1250 6.1250 0 1 0 8.1250 14.6500 Z" class="channel" />
-<text x="8.2750" y="8.5850" class="label">R7.0"</text>
-<path d="M 8.1250 13.9000 A 5.3750 5.3750 0 1 1 8.1250 3.1500 L 8.1250 4.9000 A 3.6250 3.6250 0 1 0 8.1250 12.1500 Z" class="channel" />
-<text x="8.2750" y="8.5850" class="label">R4.5"</text>
-<path d="M 8.1250 31.4000 A 6.3750 6.3750 0 1 1 8.1250 18.6500 L 8.1250 20.4000 A 4.6250 4.6250 0 1 0 8.1250 29.6500 Z" class="channel" />
-<text x="8.2750" y="25.0850" class="label">R5.5"</text>
-<path d="M 8.1250 29.4000 A 4.3750 4.3750 0 1 1 8.1250 20.6500 L 8.1250 22.4000 A 2.6250 2.6250 0 1 0 8.1250 27.6500 Z" class="channel" />
-<text x="8.2750" y="25.0850" class="label">R3.5"</text>
-<path d="M 24.1750 16.5000 A 7.9250 7.9250 0 1 1 24.1750 0.6500 L 24.1750 2.5000 A 6.0750 6.0750 0 1 0 24.1750 14.6500 Z" class="channel" />
-<text x="24.3250" y="8.6350" class="label">R7.0"</text>
-<path d="M 24.1750 14.0000 A 5.4250 5.4250 0 1 1 24.1750 3.1500 L 24.1750 5.0000 A 3.5750 3.5750 0 1 0 24.1750 12.1500 Z" class="channel" />
-<text x="24.3250" y="8.6350" class="label">R4.5"</text>
-<path d="M 24.1750 31.6000 A 6.4250 6.4250 0 1 1 24.1750 18.7500 L 24.1750 20.6000 A 4.5750 4.5750 0 1 0 24.1750 29.7500 Z" class="channel" />
-<text x="24.3250" y="25.2350" class="label">R5.5"</text>
-<path d="M 24.1750 29.6000 A 4.4250 4.4250 0 1 1 24.1750 20.7500 L 24.1750 22.6000 A 2.5750 2.5750 0 1 0 24.1750 27.7500 Z" class="channel" />
-<text x="24.3250" y="25.2350" class="label">R3.5"</text>
-<path d="M 40.3250 16.6000 A 7.9750 7.9750 0 1 1 40.3250 0.6500 L 40.3250 2.6000 A 6.0250 6.0250 0 1 0 40.3250 14.6500 Z" class="channel" />
-<text x="40.4750" y="8.6850" class="label">R7.0"</text>
-<path d="M 40.3250 14.1000 A 5.4750 5.4750 0 1 1 40.3250 3.1500 L 40.3250 5.1000 A 3.5250 3.5250 0 1 0 40.3250 12.1500 Z" class="channel" />
-<text x="40.4750" y="8.6850" class="label">R4.5"</text>
-<path d="M 40.3250 31.8000 A 6.4750 6.4750 0 1 1 40.3250 18.8500 L 40.3250 20.8000 A 4.5250 4.5250 0 1 0 40.3250 29.8500 Z" class="channel" />
-<text x="40.4750" y="25.3850" class="label">R5.5"</text>
-<path d="M 40.3250 43.5000 A 4.4750 4.4750 0 1 1 40.3250 34.5500 L 40.3250 36.5000 A 2.5250 2.5250 0 1 0 40.3250 41.5500 Z" class="channel" />
-<text x="40.4750" y="39.0850" class="label">R3.5"</text>
-<path d="M 56.5750 16.7000 A 8.0250 8.0250 0 1 1 56.5750 0.6500 L 56.5750 2.7000 A 5.9750 5.9750 0 1 0 56.5750 14.6500 Z" class="channel" />
-<text x="56.7250" y="8.7350" class="label">R7.0"</text>
-<path d="M 56.5750 14.2000 A 5.5250 5.5250 0 1 1 56.5750 3.1500 L 56.5750 5.2000 A 3.4750 3.4750 0 1 0 56.5750 12.1500 Z" class="channel" />
-<text x="56.7250" y="8.7350" class="label">R4.5"</text>
-<path d="M 56.5750 32.0000 A 6.5250 6.5250 0 1 1 56.5750 18.9500 L 56.5750 21.0000 A 4.4750 4.4750 0 1 0 56.5750 29.9500 Z" class="channel" />
-<text x="56.7250" y="25.5350" class="label">R5.5"</text>
-<path d="M 56.5750 43.8000 A 4.5250 4.5250 0 1 1 56.5750 34.7500 L 56.5750 36.8000 A 2.4750 2.4750 0 1 0 56.5750 41.7500 Z" class="channel" />
-<text x="56.7250" y="39.3350" class="label">R3.5"</text>
-<text x="8.2750" y="0.5000" class="column-label" text-anchor="middle">W=1.75"</text>
-<text x="24.5750" y="0.5000" class="column-label" text-anchor="middle">W=1.85"</text>
-<text x="40.8750" y="0.5000" class="column-label" text-anchor="middle">W=1.95"</text>
-<text x="57.1750" y="0.5000" class="column-label" text-anchor="middle">W=2.05"</text>
-<rect x="65.3500" y="44.0000" width="1" height="1" class="calibration" />
-<text x="65.8500" y="43.9000" class="calibration-label" text-anchor="middle">1" × 1"</text>
-<text x="65.8500" y="45.2000" class="calibration-label" text-anchor="middle">calibration</text>
+<path d="M 6.5250 12.9000 A 5.8750 5.8750 0 1 1 6.5250 1.1500 L 6.5250 2.9000 A 4.1250 4.1250 0 1 0 6.5250 11.1500 Z" class="channel" />
+<text x="4.4625" y="6.8022" style="font-family: Arial, sans-serif; font-size: 0.7425px; fill: #333; font-weight: bold;" text-anchor="middle">R5.0"</text>
+<text x="4.4625" y="7.6932" style="font-family: Arial, sans-serif; font-size: 0.7425px; fill: #333; font-weight: bold;" text-anchor="middle">W1.75"</text>
 
-<text x="0.25" y="45.75000000000001" class="note">Cut depth: 0.375"</text>
+<path d="M 6.5250 24.9500 A 5.3750 5.3750 0 1 1 6.5250 14.2000 L 6.5250 15.9500 A 3.6250 3.6250 0 1 0 6.5250 23.2000 Z" class="channel" />
+<text x="4.7125" y="19.3792" style="font-family: Arial, sans-serif; font-size: 0.6525px; fill: #333; font-weight: bold;" text-anchor="middle">R4.5"</text>
+<text x="4.7125" y="20.1622" style="font-family: Arial, sans-serif; font-size: 0.6525px; fill: #333; font-weight: bold;" text-anchor="middle">W1.75"</text>
+
+<path d="M 6.5250 37.0000 A 4.8750 4.8750 0 1 1 6.5250 27.2500 L 6.5250 29.0000 A 3.1250 3.1250 0 1 0 6.5250 35.2500 Z" class="channel" />
+<text x="4.9625" y="31.9562" style="font-family: Arial, sans-serif; font-size: 0.5625px; fill: #333; font-weight: bold;" text-anchor="middle">R4.0"</text>
+<text x="4.9625" y="32.6312" style="font-family: Arial, sans-serif; font-size: 0.5625px; fill: #333; font-weight: bold;" text-anchor="middle">W1.75"</text>
+
+<path d="M 6.5250 49.0500 A 4.3750 4.3750 0 1 1 6.5250 40.3000 L 6.5250 42.0500 A 2.6250 2.6250 0 1 0 6.5250 47.3000 Z" class="channel" />
+<text x="5.2125" y="44.5332" style="font-family: Arial, sans-serif; font-size: 0.4725px; fill: #333; font-weight: bold;" text-anchor="middle">R3.5"</text>
+<text x="5.2125" y="45.1002" style="font-family: Arial, sans-serif; font-size: 0.4725px; fill: #333; font-weight: bold;" text-anchor="middle">W1.75"</text>
+
+<path d="M 6.5250 61.1000 A 3.8750 3.8750 0 1 1 6.5250 53.3500 L 6.5250 55.1000 A 2.1250 2.1250 0 1 0 6.5250 59.3500 Z" class="channel" />
+<text x="5.4625" y="57.1102" style="font-family: Arial, sans-serif; font-size: 0.3825px; fill: #333; font-weight: bold;" text-anchor="middle">R3.0"</text>
+<text x="5.4625" y="57.5692" style="font-family: Arial, sans-serif; font-size: 0.3825px; fill: #333; font-weight: bold;" text-anchor="middle">W1.75"</text>
+
+<path d="M 13.0500 12.9500 A 5.9250 5.9250 0 1 1 13.0500 1.1000 L 13.0500 2.9500 A 4.0750 4.0750 0 1 0 13.0500 11.1000 Z" class="channel" />
+<text x="11.0125" y="6.8050" style="font-family: Arial, sans-serif; font-size: 0.7335px; fill: #333; font-weight: bold;" text-anchor="middle">R5.0"</text>
+<text x="11.0125" y="7.6852" style="font-family: Arial, sans-serif; font-size: 0.7335px; fill: #333; font-weight: bold;" text-anchor="middle">W1.85"</text>
+
+<path d="M 13.0500 25.0000 A 5.4250 5.4250 0 1 1 13.0500 14.1500 L 13.0500 16.0000 A 3.5750 3.5750 0 1 0 13.0500 23.1500 Z" class="channel" />
+<text x="11.2625" y="19.3820" style="font-family: Arial, sans-serif; font-size: 0.6435px; fill: #333; font-weight: bold;" text-anchor="middle">R4.5"</text>
+<text x="11.2625" y="20.1542" style="font-family: Arial, sans-serif; font-size: 0.6435px; fill: #333; font-weight: bold;" text-anchor="middle">W1.85"</text>
+
+<path d="M 13.0500 37.0500 A 4.9250 4.9250 0 1 1 13.0500 27.2000 L 13.0500 29.0500 A 3.0750 3.0750 0 1 0 13.0500 35.2000 Z" class="channel" />
+<text x="11.5125" y="31.9590" style="font-family: Arial, sans-serif; font-size: 0.5535px; fill: #333; font-weight: bold;" text-anchor="middle">R4.0"</text>
+<text x="11.5125" y="32.6232" style="font-family: Arial, sans-serif; font-size: 0.5535px; fill: #333; font-weight: bold;" text-anchor="middle">W1.85"</text>
+
+<path d="M 13.0500 49.1000 A 4.4250 4.4250 0 1 1 13.0500 40.2500 L 13.0500 42.1000 A 2.5750 2.5750 0 1 0 13.0500 47.2500 Z" class="channel" />
+<text x="11.7625" y="44.5360" style="font-family: Arial, sans-serif; font-size: 0.4635px; fill: #333; font-weight: bold;" text-anchor="middle">R3.5"</text>
+<text x="11.7625" y="45.0922" style="font-family: Arial, sans-serif; font-size: 0.4635px; fill: #333; font-weight: bold;" text-anchor="middle">W1.85"</text>
+
+<path d="M 13.0500 61.1500 A 3.9250 3.9250 0 1 1 13.0500 53.3000 L 13.0500 55.1500 A 2.0750 2.0750 0 1 0 13.0500 59.3000 Z" class="channel" />
+<text x="12.0125" y="57.1130" style="font-family: Arial, sans-serif; font-size: 0.3735px; fill: #333; font-weight: bold;" text-anchor="middle">R3.0"</text>
+<text x="12.0125" y="57.5612" style="font-family: Arial, sans-serif; font-size: 0.3735px; fill: #333; font-weight: bold;" text-anchor="middle">W1.85"</text>
+
+<path d="M 19.5750 13.0000 A 5.9750 5.9750 0 1 1 19.5750 1.0500 L 19.5750 3.0000 A 4.0250 4.0250 0 1 0 19.5750 11.0500 Z" class="channel" />
+<text x="17.5625" y="6.8076" style="font-family: Arial, sans-serif; font-size: 0.7245px; fill: #333; font-weight: bold;" text-anchor="middle">R5.0"</text>
+<text x="17.5625" y="7.6770" style="font-family: Arial, sans-serif; font-size: 0.7245px; fill: #333; font-weight: bold;" text-anchor="middle">W1.95"</text>
+
+<path d="M 19.5750 25.0500 A 5.4750 5.4750 0 1 1 19.5750 14.1000 L 19.5750 16.0500 A 3.5250 3.5250 0 1 0 19.5750 23.1000 Z" class="channel" />
+<text x="17.8125" y="19.3846" style="font-family: Arial, sans-serif; font-size: 0.6345px; fill: #333; font-weight: bold;" text-anchor="middle">R4.5"</text>
+<text x="17.8125" y="20.1460" style="font-family: Arial, sans-serif; font-size: 0.6345px; fill: #333; font-weight: bold;" text-anchor="middle">W1.95"</text>
+
+<path d="M 19.5750 37.1000 A 4.9750 4.9750 0 1 1 19.5750 27.1500 L 19.5750 29.1000 A 3.0250 3.0250 0 1 0 19.5750 35.1500 Z" class="channel" />
+<text x="18.0625" y="31.9616" style="font-family: Arial, sans-serif; font-size: 0.5445px; fill: #333; font-weight: bold;" text-anchor="middle">R4.0"</text>
+<text x="18.0625" y="32.6150" style="font-family: Arial, sans-serif; font-size: 0.5445px; fill: #333; font-weight: bold;" text-anchor="middle">W1.95"</text>
+
+<path d="M 19.5750 49.1500 A 4.4750 4.4750 0 1 1 19.5750 40.2000 L 19.5750 42.1500 A 2.5250 2.5250 0 1 0 19.5750 47.2000 Z" class="channel" />
+<text x="18.3125" y="44.5386" style="font-family: Arial, sans-serif; font-size: 0.4545px; fill: #333; font-weight: bold;" text-anchor="middle">R3.5"</text>
+<text x="18.3125" y="45.0840" style="font-family: Arial, sans-serif; font-size: 0.4545px; fill: #333; font-weight: bold;" text-anchor="middle">W1.95"</text>
+
+<path d="M 19.5750 61.2000 A 3.9750 3.9750 0 1 1 19.5750 53.2500 L 19.5750 55.2000 A 2.0250 2.0250 0 1 0 19.5750 59.2500 Z" class="channel" />
+<text x="18.5625" y="57.1156" style="font-family: Arial, sans-serif; font-size: 0.3645px; fill: #333; font-weight: bold;" text-anchor="middle">R3.0"</text>
+<text x="18.5625" y="57.5530" style="font-family: Arial, sans-serif; font-size: 0.3645px; fill: #333; font-weight: bold;" text-anchor="middle">W1.95"</text>
+
+<path d="M 26.1000 13.0500 A 6.0250 6.0250 0 1 1 26.1000 1.0000 L 26.1000 3.0500 A 3.9750 3.9750 0 1 0 26.1000 11.0000 Z" class="channel" />
+<text x="24.1125" y="6.8104" style="font-family: Arial, sans-serif; font-size: 0.7155px; fill: #333; font-weight: bold;" text-anchor="middle">R5.0"</text>
+<text x="24.1125" y="7.6690" style="font-family: Arial, sans-serif; font-size: 0.7155px; fill: #333; font-weight: bold;" text-anchor="middle">W2.05"</text>
+
+<path d="M 26.1000 25.1000 A 5.5250 5.5250 0 1 1 26.1000 14.0500 L 26.1000 16.1000 A 3.4750 3.4750 0 1 0 26.1000 23.0500 Z" class="channel" />
+<text x="24.3625" y="19.3874" style="font-family: Arial, sans-serif; font-size: 0.6255px; fill: #333; font-weight: bold;" text-anchor="middle">R4.5"</text>
+<text x="24.3625" y="20.1380" style="font-family: Arial, sans-serif; font-size: 0.6255px; fill: #333; font-weight: bold;" text-anchor="middle">W2.05"</text>
+
+<path d="M 26.1000 37.1500 A 5.0250 5.0250 0 1 1 26.1000 27.1000 L 26.1000 29.1500 A 2.9750 2.9750 0 1 0 26.1000 35.1000 Z" class="channel" />
+<text x="24.6125" y="31.9644" style="font-family: Arial, sans-serif; font-size: 0.5355px; fill: #333; font-weight: bold;" text-anchor="middle">R4.0"</text>
+<text x="24.6125" y="32.6070" style="font-family: Arial, sans-serif; font-size: 0.5355px; fill: #333; font-weight: bold;" text-anchor="middle">W2.05"</text>
+
+<path d="M 26.1000 49.2000 A 4.5250 4.5250 0 1 1 26.1000 40.1500 L 26.1000 42.2000 A 2.4750 2.4750 0 1 0 26.1000 47.1500 Z" class="channel" />
+<text x="24.8625" y="44.5414" style="font-family: Arial, sans-serif; font-size: 0.4455px; fill: #333; font-weight: bold;" text-anchor="middle">R3.5"</text>
+<text x="24.8625" y="45.0760" style="font-family: Arial, sans-serif; font-size: 0.4455px; fill: #333; font-weight: bold;" text-anchor="middle">W2.05"</text>
+
+<path d="M 26.1000 61.2500 A 4.0250 4.0250 0 1 1 26.1000 53.2000 L 26.1000 55.2500 A 1.9750 1.9750 0 1 0 26.1000 59.2000 Z" class="channel" />
+<text x="25.1125" y="57.1184" style="font-family: Arial, sans-serif; font-size: 0.3555px; fill: #333; font-weight: bold;" text-anchor="middle">R3.0"</text>
+<text x="25.1125" y="57.5450" style="font-family: Arial, sans-serif; font-size: 0.3555px; fill: #333; font-weight: bold;" text-anchor="middle">W2.05"</text>
+
+
+<rect x="26.4000" y="63.2500" width="1" height="1" class="channel" />
+<text x="0.5" y="64.7" class="note">Cut depth: 0.375"</text>
 </svg>

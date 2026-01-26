@@ -105,6 +105,29 @@ CHICANE_ANGLE_THRESHOLD = 60.0    # Degrees - direction change that indicates a 
 CHICANE_MIN_REVERSALS = 2         # Minimum direction reversals to qualify as chicane
 
 #===============================================================================
+# PER-PIECE TWEAKS
+#===============================================================================
+# Customize individual pieces by piece number (1-indexed, matching labels in SVG)
+# Available options per piece:
+#   inner_width_offset: Offset from INNER_TRACK_WIDTH_IN (inches, positive = wider)
+#                       e.g., 0.25 makes the inner channel 0.25" wider than default
+#   curve_smoothing:    Smoothing iterations (0 = none, 1-5 = progressively smoother)
+#                       Each iteration averages adjacent points to soften corners
+#
+# Example:
+#   PIECE_TWEAKS = {
+#     3 => { inner_width_offset: 0.25, curve_smoothing: 2 },
+#     7 => { curve_smoothing: 3 },
+#   }
+
+PIECE_TWEAKS = {
+  # Uncomment and modify to tweak specific pieces:
+  # 3 => { inner_width_offset: 0.25, curve_smoothing: 2 },
+  # 5 => { curve_smoothing: 3 },
+  # 6 => { inner_width_offset: 0.15 },
+}
+
+#===============================================================================
 # MANUAL SPLIT CONFIGURATION
 #===============================================================================
 # Define ALL splits manually as t-values (0.0 to 1.0 along the track path).
@@ -933,6 +956,40 @@ class TrackAnalyzer
     avg_curvature < STRAIGHTEN_THRESHOLD && max_curvature < STRAIGHTEN_THRESHOLD * 3
   end
 
+  # Apply Chaikin-style curve smoothing to a set of points
+  # Each iteration smooths corners by averaging adjacent points
+  # iterations: 0 = no smoothing, 1-5 = progressively smoother curves
+  def smooth_points(points, iterations)
+    return points if iterations <= 0 || points.length < 3
+
+    result = points.dup
+
+    iterations.times do
+      smoothed = [result.first]  # Keep first point anchored
+
+      (1...result.length - 1).each do |i|
+        prev_pt = result[i - 1]
+        curr_pt = result[i]
+        next_pt = result[i + 1]
+
+        # Chaikin-style: create two new points at 25% and 75% between neighbors
+        # This softens corners while preserving the general shape
+        # For track smoothing, we use a gentler blend to avoid distorting too much
+        blend = 0.25  # How much to pull toward neighbors (0.25 = classic Chaikin)
+
+        new_x = curr_pt[0] * (1 - blend) + (prev_pt[0] + next_pt[0]) * (blend / 2)
+        new_y = curr_pt[1] * (1 - blend) + (prev_pt[1] + next_pt[1]) * (blend / 2)
+
+        smoothed << [new_x, new_y]
+      end
+
+      smoothed << result.last  # Keep last point anchored
+      result = smoothed
+    end
+
+    result
+  end
+
   private
 
   def analyze
@@ -1170,7 +1227,9 @@ class SplitVisualizer
   end
 
   # Build a modified path that straightens "straight enough" pieces
-  def build_modified_path(analyzer, splits, original_path_data)
+  # Also applies per-piece curve smoothing from PIECE_TWEAKS
+  # Returns: { path: String, piece_data: Array of {piece_num, t_start, t_end, points} }
+  def build_modified_path(analyzer, splits, original_path_data, splits_normalized)
     # Get all t-values where we need to check for straightening
     # These are the boundaries between pieces
     all_t_values = splits.dup.sort
@@ -1180,27 +1239,46 @@ class SplitVisualizer
     all_t_values.push(1.0) unless all_t_values.last == 1.0
     all_t_values = all_t_values.sort.uniq
 
+    # Build a mapping from raw t ranges to piece numbers
+    piece_t_ranges = build_piece_t_ranges(splits, splits_normalized)
+
     # Build the path by going through each segment
     path_commands = []
     first_point = analyzer.point_at(0.0)
     path_commands << "M #{first_point[0].round(3)} #{first_point[1].round(3)}"
 
     straightened_pieces = []
+    smoothed_pieces = []
+    piece_data = []  # Store piece info for per-piece rendering
 
     (0...all_t_values.length - 1).each do |i|
       t_start = all_t_values[i]
       t_end = all_t_values[i + 1]
 
+      # Find which piece number this segment belongs to
+      piece_num = find_piece_number(t_start, t_end, piece_t_ranges)
+      tweaks = PIECE_TWEAKS[piece_num] || {}
+      smoothing = tweaks[:curve_smoothing] || 0
+
       is_straight = analyzer.is_piece_straight?(t_start, t_end)
 
-      if is_straight
+      if is_straight && smoothing == 0
         # Just draw a straight line to the end point
         end_point = analyzer.point_at(t_end)
         path_commands << "L #{end_point[0].round(3)} #{end_point[1].round(3)}"
-        straightened_pieces << [t_start, t_end]
+        straightened_pieces << [t_start, t_end, piece_num]
+        piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: [analyzer.point_at(t_start), end_point] }
       else
         # Use the original curve points as a polyline
         piece_pts = analyzer.piece_points(t_start, t_end)
+
+        # Apply smoothing if configured
+        if smoothing > 0
+          piece_pts = analyzer.smooth_points(piece_pts, smoothing)
+          smoothed_pieces << [t_start, t_end, piece_num, smoothing]
+        end
+
+        piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: piece_pts }
 
         # Skip the first point (it's the end of the previous segment)
         piece_pts[1..-1].each do |pt|
@@ -1216,12 +1294,168 @@ class SplitVisualizer
     if straightened_pieces.any?
       puts ""
       puts "Straightened Pieces:"
-      straightened_pieces.each do |t_start, t_end|
-        puts "  t=#{t_start.round(3)} to #{t_end.round(3)} -> straightened"
+      straightened_pieces.each do |t_start, t_end, piece_num|
+        puts "  Piece #{piece_num}: t=#{t_start.round(3)} to #{t_end.round(3)} -> straightened"
       end
     end
 
-    path_commands.join(" ")
+    # Report smoothed pieces
+    if smoothed_pieces.any?
+      puts ""
+      puts "Smoothed Pieces:"
+      smoothed_pieces.each do |t_start, t_end, piece_num, iterations|
+        puts "  Piece #{piece_num}: t=#{t_start.round(3)} to #{t_end.round(3)} -> #{iterations} smoothing iterations"
+      end
+    end
+
+    { path: path_commands.join(" "), piece_data: piece_data }
+  end
+
+  # Build a mapping of piece numbers to their raw t-value ranges
+  def build_piece_t_ranges(splits_raw, splits_normalized)
+    ranges = []
+
+    # splits_normalized is [0.0, 0.04, 0.115, ...] in lap order
+    # Piece N is between splits_normalized[N-1] and splits_normalized[N]
+    (0...splits_normalized.length).each do |i|
+      piece_num = i + 1
+      norm_start = splits_normalized[i]
+      norm_end = i + 1 < splits_normalized.length ? splits_normalized[i + 1] : 1.0
+
+      # Convert to raw t-values
+      raw_start = (START_FINISH_T - norm_start + 1.0) % 1.0
+      raw_end = (START_FINISH_T - norm_end + 1.0) % 1.0
+
+      ranges << { piece_num: piece_num, raw_start: raw_start, raw_end: raw_end, norm_start: norm_start, norm_end: norm_end }
+    end
+
+    ranges
+  end
+
+  # Find which piece number a given raw t-range belongs to
+  def find_piece_number(t_start, t_end, piece_t_ranges)
+    mid_t = (t_start + t_end) / 2.0
+
+    piece_t_ranges.each do |range|
+      raw_s = range[:raw_start]
+      raw_e = range[:raw_end]
+
+      # Raw t goes "backwards" relative to normalized t (because of the subtraction)
+      # For non-wrapping pieces: raw_start > raw_end
+      # For wrapping pieces (crossing start/finish): raw_start < raw_end
+      if raw_s < raw_e
+        # Wrap case: piece spans from raw_s through 1.0/0.0 to raw_e
+        if mid_t >= raw_s || mid_t <= raw_e
+          return range[:piece_num]
+        end
+      else
+        # Normal case (raw_s >= raw_e): range goes from raw_e to raw_s
+        if mid_t <= raw_s && mid_t >= raw_e
+          return range[:piece_num]
+        end
+      end
+    end
+
+    # Fallback: find closest range
+    piece_t_ranges.min_by { |r| [(r[:raw_start] - mid_t).abs, (r[:raw_end] - mid_t).abs].min }[:piece_num]
+  end
+
+  # Generate SVG for the track, with per-piece customizations
+  # Pieces with inner_width_offset get rendered separately with their own masks
+  def generate_track_svg(modified_path_data, default_inner_gap, piece_data, grain_clip_paths)
+    # Identify pieces with custom widths
+    custom_width_pieces = []
+    default_width_pieces = []
+
+    piece_data.each do |pd|
+      tweaks = PIECE_TWEAKS[pd[:piece_num]] || {}
+      if tweaks[:inner_width_offset]
+        actual_width = INNER_TRACK_WIDTH_IN + tweaks[:inner_width_offset]
+        custom_width_pieces << pd.merge(inner_width: actual_width, offset: tweaks[:inner_width_offset])
+      else
+        default_width_pieces << pd
+      end
+    end
+
+    # Report custom widths
+    if custom_width_pieces.any?
+      puts ""
+      puts "Custom Track Widths:"
+      custom_width_pieces.each do |pd|
+        total = pd[:inner_width] + (SIDEWALL_THICKNESS_IN * 2)
+        sign = pd[:offset] >= 0 ? "+" : ""
+        puts "  Piece #{pd[:piece_num]}: #{sign}#{pd[:offset]}\" offset -> inner=#{pd[:inner_width]}\" (total=#{total.round(2)}\")"
+      end
+    end
+
+    svg_parts = []
+
+    # Start with defs section
+    svg_parts << "<defs>"
+
+    # Default track mask (for pieces without custom width)
+    svg_parts << %(<mask id="track-profile-mask">)
+    svg_parts << %(<path d="#{modified_path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>)
+    svg_parts << %(<path d="#{modified_path_data}" stroke="black" stroke-width="#{default_inner_gap}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>)
+
+    # For each custom-width piece, add a white path to "erase" it from the default mask
+    # so we can render it separately
+    custom_width_pieces.each do |pd|
+      piece_path = points_to_path(pd[:points])
+      # Use a slightly wider stroke to ensure clean cutout
+      cutout_width = TRACK_OUTER_WIDTH_IN + 0.1
+      svg_parts << %(<path d="#{piece_path}" stroke="black" stroke-width="#{cutout_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>)
+    end
+
+    svg_parts << "</mask>"
+
+    # Create individual masks for custom-width pieces
+    custom_width_pieces.each do |pd|
+      piece_path = points_to_path(pd[:points])
+      total_width = pd[:inner_width] + (SIDEWALL_THICKNESS_IN * 2)
+      mask_id = "track-mask-piece-#{pd[:piece_num]}"
+
+      svg_parts << %(<mask id="#{mask_id}">)
+      svg_parts << %(<path d="#{piece_path}" stroke="white" stroke-width="#{total_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>)
+      svg_parts << %(<path d="#{piece_path}" stroke="black" stroke-width="#{pd[:inner_width]}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>)
+      svg_parts << "</mask>"
+    end
+
+    # Add grain clip paths
+    svg_parts << grain_clip_paths.join("\n")
+    svg_parts << "</defs>"
+
+    # Main track group
+    svg_parts << %(<g id="main-track" data-inner-width="#{INNER_TRACK_WIDTH_IN}" data-sidewall-thickness="#{SIDEWALL_THICKNESS_IN}" data-sidewall-height="#{SIDEWALL_HEIGHT_IN}" data-total-width="#{TOTAL_TRACK_WIDTH_IN.round(2)}">)
+    svg_parts << %(<!-- Track profile: #{SIDEWALL_THICKNESS_IN}" sidewalls | #{INNER_TRACK_WIDTH_IN}" inner channel | #{SIDEWALL_THICKNESS_IN}" sidewalls = #{TOTAL_TRACK_WIDTH_IN.round(2)}" total -->)
+
+    # Render default-width track (with custom pieces cut out)
+    svg_parts << %(<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#track-profile-mask)"/>)
+
+    # Render custom-width pieces on top
+    custom_width_pieces.each do |pd|
+      piece_path = points_to_path(pd[:points])
+      total_width = pd[:inner_width] + (SIDEWALL_THICKNESS_IN * 2)
+      mask_id = "track-mask-piece-#{pd[:piece_num]}"
+
+      svg_parts << %(<!-- Piece #{pd[:piece_num]}: custom width #{pd[:inner_width]}" -->)
+      svg_parts << %(<path d="#{piece_path}" stroke="#{TRACK_COLOR}" stroke-width="#{total_width}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(##{mask_id})"/>)
+    end
+
+    svg_parts << "</g>"
+
+    svg_parts.join("\n")
+  end
+
+  # Convert an array of points to an SVG path string
+  def points_to_path(points)
+    return "" if points.nil? || points.empty?
+
+    commands = ["M #{points.first[0].round(3)} #{points.first[1].round(3)}"]
+    points[1..-1].each do |pt|
+      commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+    end
+    commands.join(" ")
   end
 
   def generate
@@ -1531,23 +1765,12 @@ class SplitVisualizer
 
     # Build a custom path that straightens "straight enough" pieces
     # We need to generate path data for each piece
-    modified_path_data = build_modified_path(analyzer, splits, path_data)
+    path_result = build_modified_path(analyzer, splits, path_data, splits_normalized)
+    modified_path_data = path_result[:path]
+    piece_data = path_result[:piece_data]
 
-    # SVG mask creates the U-shape profile view:
-    # - White stroke at total width defines outer boundary
-    # - Black stroke at inner width "cuts out" the channel where the car rides
-    # - Result: two visible sidewalls with transparent channel between them
-    main_track = %(<defs>
-<mask id="track-profile-mask">
-<path d="#{modified_path_data}" stroke="white" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-<path d="#{modified_path_data}" stroke="black" stroke-width="#{inner_gap_width}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-</mask>
-#{grain_clip_paths.join("\n")}
-</defs>
-<g id="main-track" data-inner-width="#{INNER_TRACK_WIDTH_IN}" data-sidewall-thickness="#{SIDEWALL_THICKNESS_IN}" data-sidewall-height="#{SIDEWALL_HEIGHT_IN}" data-total-width="#{TOTAL_TRACK_WIDTH_IN.round(2)}">
-<!-- Track profile: #{SIDEWALL_THICKNESS_IN}" sidewalls | #{INNER_TRACK_WIDTH_IN}" inner channel | #{SIDEWALL_THICKNESS_IN}" sidewalls = #{TOTAL_TRACK_WIDTH_IN.round(2)}" total -->
-<path d="#{modified_path_data}" stroke="#{TRACK_COLOR}" stroke-width="#{TRACK_OUTER_WIDTH_IN}" stroke-linecap="round" stroke-linejoin="round" fill="none" mask="url(#track-profile-mask)"/>
-</g>)
+    # Generate per-piece track rendering (handles custom widths internally)
+    main_track = generate_track_svg(modified_path_data, inner_gap_width, piece_data, grain_clip_paths)
 
     # Create grain direction group - uses per-piece polygon clip paths
     grain_group = ""

@@ -6,14 +6,14 @@
 # Edit the constants below to customize the test pieces
 
 # Test parameters
-RADII = [3.5, 4.5, 5.5, 7.0]  # inches, centerline radius
+RADII = [3.0, 3.5, 4.0, 4.5, 5.0]  # inches, centerline radius
 TRACK_WIDTHS = [1.75, 1.85, 1.95, 2.05]  # inches, inner channel width
 CUT_DEPTH = 0.375  # 3/8 inch
-ARC_DEGREES = 180  # degrees of arc (full 180° turn)
+ARC_DEGREES = 180  # degrees of arc (full half turn)
 
 # Layout parameters
-PADDING = 0.25  # inches between pieces
-MIN_GAP = 0.15  # minimum gap between nested arcs for router bit
+PADDING = 0.5  # inches between pieces
+MIN_GAP = 0.12  # minimum gap between nested arcs for router bit
 
 class TestPieceGenerator
   attr_reader :total_width, :total_height
@@ -38,57 +38,35 @@ class TestPieceGenerator
   end
 
   def calculate_layout
-    # For 180° arcs, organize by width columns and nest radii that fit
-    # Arc from 90° to 270° spans from bottom (+r) to top (-r), bulging left
+    # For 180° arcs, arrange in a grid - each arc is outer_r wide × 2*outer_r tall
+    # Arc from 90° to 270°: starts at bottom, curves left, ends at top
     @layout = []
+    @column_positions = []
 
-    current_x = PADDING
+    max_outer = RADII.max + TRACK_WIDTHS.max / 2.0
+    arc_height = max_outer * 2  # 180° arc spans full diameter vertically
 
-    TRACK_WIDTHS.each do |width|
-      pieces_at_width = @pieces.select { |p| p[:width] == width }.sort_by { |p| -p[:radius] }
+    # Grid: 4 columns (widths) × 4 rows (radii)
+    TRACK_WIDTHS.each_with_index do |width, col_idx|
+      col_x = PADDING + col_idx * (max_outer + PADDING) + max_outer
 
-      # Find which pieces can be nested together
-      groups = []
-      pieces_at_width.each do |piece|
-        placed = false
-        groups.each do |group|
-          # Check if this piece can nest inside the smallest piece in the group
-          smallest = group.min_by { |p| p[:radius] }
-          gap = smallest[:inner_r] - piece[:outer_r]
-          if gap >= MIN_GAP
-            group << piece
-            placed = true
-            break
-          end
-        end
-        groups << [piece] unless placed
+      RADII.sort.reverse.each_with_index do |radius, row_idx|
+        piece = @pieces.find { |p| p[:width] == width && p[:radius] == radius }
+        # Center Y for each row - arc extends outer_r above and below center
+        center_y = PADDING + 0.5 + max_outer + row_idx * (arc_height + PADDING)
+
+        piece[:x] = col_x
+        piece[:y] = center_y
+        piece[:arc_bottom] = center_y + piece[:outer_r]
+        @layout << piece
       end
 
-      # Layout each group in this column
-      max_outer = pieces_at_width.first[:outer_r]
-      col_center_x = current_x + max_outer
-
-      current_y = PADDING + 0.4 + max_outer  # center Y for first group (0.4 for column label)
-
-      groups.each do |group|
-        largest = group.max_by { |p| p[:radius] }
-        group.each do |piece|
-          piece[:x] = col_center_x
-          piece[:y] = current_y
-          piece[:arc_bottom] = current_y + piece[:outer_r]
-          @layout << piece
-        end
-        # Move down for next group (non-nested pieces)
-        current_y += largest[:outer_r] * 2 + PADDING + 0.5
-      end
-
-      current_x += max_outer * 2 + PADDING
+      @column_positions << { x: col_x, y: PADDING + 0.2, width: width }
     end
 
     # Calculate total bounds
-    @total_width = current_x + 2.0  # extra space for calibration square
-    max_bottom = @layout.map { |p| p[:arc_bottom] }.max
-    @total_height = max_bottom + 2.0  # space for labels and calibration square
+    @total_width = PADDING + TRACK_WIDTHS.size * (max_outer + PADDING) + 1.3
+    @total_height = PADDING + 0.5 + RADII.size * (arc_height + PADDING) + 1.0
   end
 
   def generate_svg
@@ -174,40 +152,29 @@ class TestPieceGenerator
   end
 
   def generate_label(piece)
-    # Position label outside the arc, to the right of the opening
-    label_x = piece[:x] + 0.15
-    label_y = piece[:y] + 0.06
+    # Position label in the negative space inside the arc (center of the "rainbow")
+    label_x = piece[:x] - piece[:inner_r] * 0.5
+    label_y = piece[:y]
 
-    text = "R#{piece[:radius]}\""
+    font_size = piece[:inner_r] * 0.18
 
-    %(<text x="#{fmt(label_x)}" y="#{fmt(label_y)}" class="label">#{text}</text>)
+    # Two lines: radius and width
+    <<~SVG
+      <text x="#{fmt(label_x)}" y="#{fmt(label_y - font_size * 0.3)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">R#{piece[:radius]}"</text>
+      <text x="#{fmt(label_x)}" y="#{fmt(label_y + font_size * 0.9)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">W#{piece[:width]}"</text>
+    SVG
   end
 
   def generate_column_labels
-    # Add width labels at top of each column
-    labels = []
-    max_outer = RADII.max + TRACK_WIDTHS.max / 2.0
-    current_x = PADDING
-
-    TRACK_WIDTHS.each do |width|
-      col_center_x = current_x + max_outer
-      labels << %(<text x="#{fmt(col_center_x)}" y="#{fmt(PADDING + 0.25)}" class="column-label" text-anchor="middle">W=#{width}"</text>)
-      current_x += max_outer * 2 + PADDING
-    end
-
-    labels.join("\n")
+    ""  # Labels removed - each piece shows its own R and W values
   end
 
   def generate_calibration_square
-    # 1" × 1" calibration square in bottom-right corner
+    # 1" × 1" solid calibration square in bottom-right corner
     square_x = @total_width - 1.5
-    square_y = @total_height - 1.8
+    square_y = @total_height - 1.5
 
-    <<~SVG
-      <rect x="#{fmt(square_x)}" y="#{fmt(square_y)}" width="1" height="1" class="calibration" />
-      <text x="#{fmt(square_x + 0.5)}" y="#{fmt(square_y - 0.1)}" class="calibration-label" text-anchor="middle">1" × 1"</text>
-      <text x="#{fmt(square_x + 0.5)}" y="#{fmt(square_y + 1.2)}" class="calibration-label" text-anchor="middle">calibration</text>
-    SVG
+    %(<rect x="#{fmt(square_x)}" y="#{fmt(square_y)}" width="1" height="1" class="channel" />)
   end
 
   def fmt(num)
