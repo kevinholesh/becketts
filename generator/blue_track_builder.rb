@@ -6,13 +6,14 @@ class BlueTrackBuilder
   # Points per inch for generated paths
   POINTS_PER_INCH = 5
 
-  attr_reader :points, :path_length
+  attr_reader :points, :path_length, :segments
 
   def initialize(definition, start_pt, start_dir)
     @definition = definition
     @start_pt = start_pt.dup
     @start_dir = normalize(start_dir)
     @points = []
+    @segments = []  # Array of { index: N, type: :straight/:turn, points: [...] }
     @path_length = 0.0
   end
 
@@ -20,11 +21,12 @@ class BlueTrackBuilder
   # Returns array of points in racing order (entry to exit)
   def build
     @points = [@start_pt.dup]
+    @segments = []
     current_pt = @start_pt.dup
     current_dir = @start_dir.dup
     @path_length = 0.0
 
-    @definition.each do |prim|
+    @definition.each_with_index do |prim, idx|
       case prim[:type]
       when :straight
         length = prim[:length] || 0
@@ -43,6 +45,9 @@ class BlueTrackBuilder
         num_pts = [2, (length * POINTS_PER_INCH).ceil].max
         straight_pts = build_straight(current_pt, current_dir, length, num_pts)
 
+        # Track this segment (include the connection point from previous)
+        @segments << { index: idx, type: :straight, points: straight_pts }
+
         @points += straight_pts[1..-1]  # Skip first (already added)
         current_pt = straight_pts.last.dup
         # Direction is now set by the straight (keeps the adjusted direction)
@@ -57,6 +62,9 @@ class BlueTrackBuilder
         arc_length = radius * angle * Math::PI / 180
         num_pts = [2, (arc_length * POINTS_PER_INCH).ceil].max
         turn_pts = build_arc(current_pt, current_dir, radius, angle, direction, num_pts)
+
+        # Track this segment
+        @segments << { index: idx, type: :turn, points: turn_pts }
 
         @points += turn_pts[1..-1]  # Skip first (already added)
         current_pt = turn_pts.last.dup

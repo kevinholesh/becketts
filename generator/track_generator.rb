@@ -4,7 +4,6 @@
 # Generates SVG pieces for CNC cutting from walnut wood
 # Optimized for Hot Wheels Premium F1 cars
 
-require_relative 'track_segmenter'
 require_relative 'blue_track_builder'
 
 #===============================================================================
@@ -182,9 +181,6 @@ BLUE_TRACK_DEFINITION = [
   { type: :turn, radius: 20, angle: 10, direction: :left },
 ]
 
-# Debug: Set to true to re-analyze the original track and print a new primitive chain
-GENERATE_TRACK_DEFINITION = false
-
 #===============================================================================
 # MANUAL SPLIT CONFIGURATION
 #===============================================================================
@@ -235,6 +231,7 @@ SHOW_EDIT_PATH = true             # Enable blue edit path overlay
 EDIT_PATH_COLOR = '#0066FF'       # Blue for edit path
 EDIT_PATH_WIDTH_IN = 0.8         # Thicker line for visibility
 EDIT_PATH_OPACITY = 0.5          # Semi-transparent for overlay
+EDIT_PATH_MULTI_COLOR = true     # Different shade of blue for each primitive (helps with tracing)
 
 # Rendering toggles - disable to focus on path editing
 SHOW_SIDEWALLS = false           # Render the U-shaped track profile
@@ -1480,7 +1477,7 @@ class SplitVisualizer
     # Don't close the path - leave it open for manual tracing
     # path_commands << "Z"
 
-    { path: path_commands.join(" "), piece_data: piece_data }
+    { path: path_commands.join(" "), piece_data: piece_data, primitive_segments: builder.segments }
   end
 
   # Phase 1: Build piece chain in racing order with original endpoints
@@ -2105,21 +2102,6 @@ class SplitVisualizer
     puts "  Split points found: #{splits.length}"
     puts ""
 
-    # Generate track definition if requested
-    if GENERATE_TRACK_DEFINITION
-      segmenter = TrackSegmenter.new(analyzer, start_t: START_FINISH_T)
-      segmenter.segment
-      segmenter.print_summary
-
-      puts ""
-      puts "=" * 60
-      puts "COPY THIS INTO BLUE_TRACK_DEFINITION:"
-      puts "=" * 60
-      puts segmenter.generate_definition_code
-      puts "=" * 60
-      puts ""
-    end
-
     # Split lines will be generated later from piece_data (the blue edit path)
     # This ensures split lines appear on the actual track being built, not the ghost track
     split_lines = []
@@ -2275,6 +2257,7 @@ class SplitVisualizer
     path_result = build_modified_path(analyzer, splits, path_data, splits_normalized)
     modified_path_data = path_result[:path]
     piece_data = path_result[:piece_data]
+    primitive_segments = path_result[:primitive_segments] || []
 
     # Generate split lines from piece_data (the blue edit path)
     # Each piece's first point (in raw-t order) is where the split line should be
@@ -2434,9 +2417,33 @@ class SplitVisualizer
     # This shows the OUTPUT path (after straightening/smoothing) that will be used for sidewalls
     edit_path = ""
     if SHOW_EDIT_PATH
-      edit_path = %(<g id="edit-path">
+      if EDIT_PATH_MULTI_COLOR && primitive_segments.any?
+        # Draw each primitive segment in a different shade of blue
+        segment_paths = primitive_segments.map.with_index do |seg, i|
+          pts = seg[:points]
+          next nil if pts.nil? || pts.length < 2
+
+          # Generate different shades of blue based on segment index
+          # Cycle through hues from cyan (180) to blue (240) to purple (280)
+          hue = 200 + (i * 31) % 80  # Varies from 200 to 280
+          saturation = 70 + (i * 13) % 30  # 70-100%
+          lightness = 40 + (i * 11) % 25   # 40-65%
+          color = "hsl(#{hue}, #{saturation}%, #{lightness}%)"
+
+          # Build path for this segment
+          path_d = "M #{pts[0][0].round(3)} #{pts[0][1].round(3)}"
+          pts[1..-1].each { |pt| path_d += " L #{pt[0].round(3)} #{pt[1].round(3)}" }
+
+          %(<path d="#{path_d}" stroke="#{color}" stroke-width="#{EDIT_PATH_WIDTH_IN}" fill="none" opacity="#{EDIT_PATH_OPACITY}" data-segment="#{i + 1}" data-type="#{seg[:type]}"/>)
+        end.compact
+
+        edit_path = %(<g id="edit-path">\n#{segment_paths.join("\n")}\n</g>)
+      else
+        # Single color for entire path
+        edit_path = %(<g id="edit-path">
 <path d="#{modified_path_data}" stroke="#{EDIT_PATH_COLOR}" stroke-width="#{EDIT_PATH_WIDTH_IN}" fill="none" opacity="#{EDIT_PATH_OPACITY}"/>
 </g>)
+      end
     end
 
     # Generate per-piece track rendering (handles custom widths internally)
