@@ -112,6 +112,23 @@ class TestPieceGenerator
     svg.join("\n")
   end
 
+  def generate_individual_svgs(output_dir)
+    # Create output directory
+    Dir.mkdir(output_dir) unless Dir.exist?(output_dir)
+
+    files_created = []
+
+    @pieces.each do |piece|
+      svg_content = generate_individual_svg(piece)
+      filename = "cr#{piece[:radius]}_w#{piece[:width]}.svg"
+      filepath = File.join(output_dir, filename)
+      File.write(filepath, svg_content)
+      files_created << filename
+    end
+
+    files_created
+  end
+
   private
 
   def svg_header
@@ -210,6 +227,87 @@ class TestPieceGenerator
     %(<rect x="#{square_x}" y="#{square_y}" width="1" height="1" class="channel" />)
   end
 
+  def generate_individual_svg(piece)
+    # Calculate dimensions for individual piece
+    # Position arc so top-right aligns with grid at (outer_r, 1)
+    outer_r = piece[:outer_r]
+    inner_r = piece[:inner_r]
+
+    # Arc center position (top-right of arc at grid intersection)
+    cx = outer_r.ceil  # Enough room for arc to extend left
+    cy = 1 + outer_r   # Top at y=1, center below
+
+    # SVG dimensions (whole inches for grid alignment)
+    svg_width = cx + 2  # Room for calibration square on right
+    svg_height = (cy + outer_r).ceil + 2  # Room for arc bottom + margin
+
+    svg = []
+    svg << %(<?xml version="1.0" encoding="UTF-8"?>)
+    svg << %(<svg xmlns="http://www.w3.org/2000/svg")
+    svg << %(     width="#{svg_width}in")
+    svg << %(     height="#{svg_height}in")
+    svg << %(     viewBox="0 0 #{svg_width} #{svg_height}">)
+
+    # Styles
+    svg << %(<style>)
+    svg << %(  .channel { fill: #333333; stroke: none; })
+    svg << %(  .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; })
+    svg << %(</style>)
+
+    # White background
+    svg << %(<rect width="100%" height="100%" fill="white" />)
+
+    # Grid
+    if SHOW_BACKGROUND_GRID
+      svg << %(<defs>)
+      svg << %(<pattern id="background-grid" width="#{GRID_SIZE_IN}" height="#{GRID_SIZE_IN}" patternUnits="userSpaceOnUse">)
+      svg << %(<path d="M #{GRID_SIZE_IN} 0 L 0 0 0 #{GRID_SIZE_IN}" fill="none" stroke="#{GRID_COLOR}" stroke-width="#{GRID_LINE_WIDTH_IN}"/>)
+      svg << %(</pattern>)
+      svg << %(</defs>)
+      svg << %(<rect x="0" y="0" width="#{svg_width}" height="#{svg_height}" fill="url(#background-grid)"/>)
+    end
+
+    # Arc channel
+    start_angle = 90 * Math::PI / 180
+    end_angle = (90 + ARC_DEGREES) * Math::PI / 180
+
+    outer_start_x = cx + outer_r * Math.cos(start_angle)
+    outer_start_y = cy + outer_r * Math.sin(start_angle)
+    outer_end_x = cx + outer_r * Math.cos(end_angle)
+    outer_end_y = cy + outer_r * Math.sin(end_angle)
+
+    inner_start_x = cx + inner_r * Math.cos(start_angle)
+    inner_start_y = cy + inner_r * Math.sin(start_angle)
+    inner_end_x = cx + inner_r * Math.cos(end_angle)
+    inner_end_y = cy + inner_r * Math.sin(end_angle)
+
+    large_arc = ARC_DEGREES >= 180 ? 1 : 0
+
+    path = "M #{fmt(outer_start_x)} #{fmt(outer_start_y)} "
+    path += "A #{fmt(outer_r)} #{fmt(outer_r)} 0 #{large_arc} 1 #{fmt(outer_end_x)} #{fmt(outer_end_y)} "
+    path += "L #{fmt(inner_end_x)} #{fmt(inner_end_y)} "
+    path += "A #{fmt(inner_r)} #{fmt(inner_r)} 0 #{large_arc} 0 #{fmt(inner_start_x)} #{fmt(inner_start_y)} "
+    path += "Z"
+
+    svg << %(<path d="#{path}" class="channel" />)
+
+    # Labels inside the arc
+    label_x = cx - inner_r * 0.5
+    label_y = cy
+    font_size = inner_r * 0.18
+
+    svg << %(<text x="#{fmt(label_x)}" y="#{fmt(label_y - font_size * 0.3)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">CR#{piece[:radius]}"</text>)
+    svg << %(<text x="#{fmt(label_x)}" y="#{fmt(label_y + font_size * 0.9)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">W#{piece[:width]}"</text>)
+
+    # Calibration square (1" × 1") aligned to grid
+    cal_x = svg_width - 2
+    cal_y = svg_height - 2
+    svg << %(<rect x="#{cal_x}" y="#{cal_y}" width="1" height="1" class="channel" />)
+
+    svg << %(</svg>)
+    svg.join("\n")
+  end
+
   def fmt(num)
     format('%.4f', num)
   end
@@ -220,8 +318,13 @@ if __FILE__ == $PROGRAM_NAME
   generator = TestPieceGenerator.new
   svg_content = generator.generate_svg
 
+  # Generate combined SVG
   output_path = File.join(__dir__, 'test_pieces.svg')
   File.write(output_path, svg_content)
+
+  # Generate individual SVGs
+  individual_dir = File.join(__dir__, 'test_pieces')
+  individual_files = generator.generate_individual_svgs(individual_dir)
 
   puts "Generated: #{output_path}"
   puts "Sheet size: %.1f\" × %.1f\"" % [generator.total_width, generator.total_height]
@@ -229,10 +332,11 @@ if __FILE__ == $PROGRAM_NAME
   puts "Radii: #{RADII.join(', ')} inches"
   puts "Widths: #{TRACK_WIDTHS.join(', ')} inches"
   puts "Cut depth: #{CUT_DEPTH} inches"
-
+  puts ""
+  puts "Individual SVGs: #{individual_dir}/"
+  puts "  #{individual_files.length} files created"
 
   puts ""
   print 'Opening in Cursor...'
   system("cursor", output_path)
-
 end
