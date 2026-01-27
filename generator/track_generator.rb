@@ -8,33 +8,6 @@ require_relative 'track_segmenter'
 require_relative 'blue_track_builder'
 
 #===============================================================================
-# BLUE TRACK PRIMITIVE CHAIN
-#===============================================================================
-# This defines the blue (edit) track as a sequence of arcs and straights.
-# Edit these values to reshape the track. The red ghost track shows the original.
-#
-# Each primitive is either:
-#   { type: :straight, length: X }           - straight segment of X inches
-#   { type: :straight, length: X, angle: A }        - straight at absolute angle A (0=right, 90=down)
-#   { type: :straight, length: X, angle_offset: O } - straight rotated O degrees from current dir
-#   { type: :turn, radius: R, angle: A, direction: :left/:right }  - arc segment
-#
-# Net turn angle should sum to ~360 (clockwise) or ~-360 (counter-clockwise)
-# for the track to close properly.
-
-# IMPORTANT: Never overwrite this definition...
-BLUE_TRACK_DEFINITION = [
-  { type: :straight, length: 13.6, angle_offset: -4.7 },
-  { type: :turn, radius: 5, angle: 62.0, direction: :right },
-  { type: :straight, length: 2.7 },
-  { type: :turn, radius: 5, angle: 47.0, direction: :left },
-  { type: :straight, length: 4.5 },
-]
-
-# Debug: Set to true to re-analyze the original track and print a new primitive chain
-GENERATE_TRACK_DEFINITION = false
-
-#===============================================================================
 # CONFIGURATION
 #===============================================================================
 
@@ -88,8 +61,8 @@ end
 
 # Turning constraints (in inches)
 # Minimum radius should be at least 1.5x car length for smooth turns
-MIN_TURN_RADIUS_IN = 4.5
-COMFORTABLE_TURN_RADIUS_IN = 5.5
+MIN_TURN_RADIUS_IN = 2.5 # Centerline
+COMFORTABLE_TURN_RADIUS_IN = 3.5
 
 # Maximum assembled track size (in inches)
 MAX_TRACK_DIMENSION_IN = 60.0     # 5 feet
@@ -157,16 +130,60 @@ PIECE_OVERRIDES = {
   #   length: 8.0,  # 4 inch straight
   #   # direction_adjust: 10,  # Uncomment to rotate 10° left
   # },
-  12 => {
-    segments: [
-      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 80, direction: :left },
-      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 100, direction: :right },
-    ],
-  },
+  # 12 => {
+  #   segments: [
+  #     { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 80, direction: :left },
+  #     { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 100, direction: :right },
+  #   ],
+  # },
 }
 
 # Show turn markers for debugging override geometry (T1, T2, etc. labels)
 SHOW_TURN_MARKERS = false
+
+
+#===============================================================================
+# BLUE TRACK PRIMITIVE CHAIN
+#===============================================================================
+# This defines the blue (edit) track as a sequence of arcs and straights.
+# Edit these values to reshape the track. The red ghost track shows the original.
+#
+# Each primitive is either:
+#   { type: :straight, length: X }           - straight segment of X inches
+#   { type: :straight, length: X, angle: A }        - straight at absolute angle A (0=right, 90=down)
+#   { type: :straight, length: X, angle_offset: O } - straight rotated O degrees from current dir
+#   { type: :turn, radius: R, angle: A, direction: :left/:right }  - arc segment
+#
+# Net turn angle should sum to ~360 (clockwise) or ~-360 (counter-clockwise)
+# for the track to close properly.
+
+# IMPORTANT: Never overwrite this definition...
+BLUE_TRACK_DEFINITION = [
+  { type: :straight, length: 13.6, angle_offset: -4.7 },
+  { type: :turn, radius: 5, angle: 62.0, direction: :right },
+  { type: :straight, length: 2.7 },
+  { type: :turn, radius: 5, angle: 47.0, direction: :left },
+  { type: :straight, length: 3.5 },
+  { type: :turn, radius: MIN_TURN_RADIUS_IN, angle: 110.0, direction: :right },
+  { type: :straight, length: 0 },
+  { type: :turn, radius: MIN_TURN_RADIUS_IN, angle: 160.0, direction: :left },
+  { type: :straight, length: 1.4 },
+  { type: :turn, radius: 4.5, angle: 50, direction: :left },
+  { type: :straight, length: 22.5 },
+  { type: :turn, radius: MIN_TURN_RADIUS_IN, angle: 132, direction: :left },
+  { type: :straight, length: 0.5 },
+  { type: :turn, radius: MIN_TURN_RADIUS_IN, angle: 212, direction: :right },
+  { type: :straight, length: 6.8 },
+  { type: :turn, radius: 5, angle: 51, direction: :right },
+  { type: :straight, length: 15.3 },
+  { type: :turn, radius: 5, angle: 88.4, direction: :right },
+  { type: :straight, length: 12 },
+  # { type: :turn, radius: 100, angle: 7, direction: :right },
+  { type: :turn, radius: 20, angle: 10, direction: :left },
+]
+
+# Debug: Set to true to re-analyze the original track and print a new primitive chain
+GENERATE_TRACK_DEFINITION = false
 
 #===============================================================================
 # MANUAL SPLIT CONFIGURATION
