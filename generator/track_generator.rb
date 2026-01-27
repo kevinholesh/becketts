@@ -13,6 +13,7 @@ require_relative 'blue_track_builder'
 # Input/Output files
 INPUT_FILE = 'silverstone.svg'
 OUTPUT_FILE = 'silverstone-split.svg'
+PIECES_FILE = 'pieces.svg'
 
 # Hot Wheels Premium F1 car dimensions (inches)
 PREMIUM_CAR_LENGTH_IN = 3.47
@@ -1756,6 +1757,300 @@ class SplitVisualizer
     puts "Generated #{@output_file} with #{splits.length} split indicators"
     puts ""
     puts "Piece count: #{splits.length} pieces"
+
+    # Store piece_data for use by PieceLayoutGenerator
+    @piece_data_for_layout = piece_data
+    piece_data
+  end
+
+  # Return piece_data for use by PieceLayoutGenerator
+  attr_reader :piece_data_for_layout
+
+  def generate_with_pieces
+    generate
+    @piece_data_for_layout
+  end
+end
+
+#===============================================================================
+# PIECE LAYOUT GENERATOR
+#===============================================================================
+# Generates a layout SVG with all pieces arranged for CNC cutting
+
+class PieceLayoutGenerator
+  LAYOUT_PADDING = 0.8        # Padding around each piece (inches)
+  LABEL_OFFSET = 0.4          # Offset for label from piece edge (inches)
+  CALIBRATION_SIZE = 1.0      # Size of calibration block (inches)
+
+  def initialize(piece_data, inner_width, sidewall_thickness)
+    @piece_data = piece_data
+    @inner_width = inner_width
+    @sidewall_thickness = sidewall_thickness
+    @total_width = inner_width + (sidewall_thickness * 2)
+  end
+
+  def generate
+    return if @piece_data.empty?
+
+    puts ""
+    puts "="*60
+    puts "GENERATING PIECE LAYOUT"
+    puts "="*60
+
+    # Calculate bounds for each piece, rotate to vertical, and normalize to origin
+    normalized_pieces = []
+    inventory = []
+
+    @piece_data.each do |pd|
+      points = pd[:points]
+      next if points.nil? || points.length < 2
+
+      # Calculate the principal direction of the piece (start to end)
+      start_pt = points.first
+      end_pt = points.last
+      dx = end_pt[0] - start_pt[0]
+      dy = end_pt[1] - start_pt[1]
+
+      # Calculate rotation angle to make the piece vertical (add 90 degrees)
+      angle = Math.atan2(dy, dx)
+      vertical_angle = -angle + Math::PI / 2  # Rotate to vertical
+
+      # Rotate all centerline points to be vertical
+      rotated_centerline = points.map { |p| rotate_point(p, vertical_angle, start_pt) }
+
+      # Build solid track shape from rotated centerline
+      solid_shape = build_solid_shape(rotated_centerline)
+      next unless solid_shape
+
+      # Calculate bounding box
+      min_x = solid_shape.map { |p| p[0] }.min
+      max_x = solid_shape.map { |p| p[0] }.max
+      min_y = solid_shape.map { |p| p[1] }.min
+      max_y = solid_shape.map { |p| p[1] }.max
+
+      width = max_x - min_x
+      height = max_y - min_y
+
+      # Normalize points to origin (0,0)
+      shape_normalized = solid_shape.map { |p| [p[0] - min_x, p[1] - min_y] }
+
+      # Calculate arc length (actual track length)
+      arc_length = 0.0
+      (1...points.length).each do |i|
+        adx = points[i][0] - points[i-1][0]
+        ady = points[i][1] - points[i-1][1]
+        arc_length += Math.sqrt(adx*adx + ady*ady)
+      end
+
+      # Calculate straightness (ratio of direct distance to arc length)
+      direct_dist = Math.sqrt(dx*dx + dy*dy)
+      straightness = arc_length > 0 ? direct_dist / arc_length : 0
+
+      normalized_pieces << {
+        piece_num: pd[:piece_num],
+        width: width,
+        height: height,
+        arc_length: arc_length,
+        straightness: straightness,
+        shape_pts: shape_normalized
+      }
+
+      inventory << {
+        piece_num: pd[:piece_num],
+        width: width,
+        height: height,
+        arc_length: arc_length,
+        straightness: straightness
+      }
+    end
+
+    # Sort pieces: straight pieces first (by straightness desc), then by piece number
+    normalized_pieces.sort_by! { |p| [-p[:straightness], p[:piece_num]] }
+    inventory.sort_by! { |p| p[:piece_num] }
+
+    # Print inventory
+    puts ""
+    puts "PIECE INVENTORY:"
+    puts "-" * 60
+    puts "  #   | Bounding Box     | Track Length | Straightness"
+    puts "-" * 60
+    total_length = 0.0
+    inventory.each do |item|
+      total_length += item[:arc_length]
+      straight_pct = (item[:straightness] * 100).round(0)
+      puts "  #{item[:piece_num].to_s.rjust(2)}  | #{item[:width].round(2).to_s.rjust(6)}\" x #{item[:height].round(2).to_s.ljust(6)}\" | #{item[:arc_length].round(2).to_s.rjust(6)}\"    | #{straight_pct}%"
+    end
+    puts "-" * 60
+    puts "  Total track length: #{total_length.round(2)}\""
+    puts ""
+
+    # Layout pieces in rows, packing by height
+    layout = calculate_layout(normalized_pieces)
+    svg_content = generate_svg(layout, normalized_pieces)
+
+    File.write(PIECES_FILE, svg_content)
+    puts "Generated #{PIECES_FILE} with #{normalized_pieces.length} pieces"
+  end
+
+  def rotate_point(point, angle, origin)
+    cos_a = Math.cos(angle)
+    sin_a = Math.sin(angle)
+    dx = point[0] - origin[0]
+    dy = point[1] - origin[1]
+    [
+      origin[0] + dx * cos_a - dy * sin_a,
+      origin[1] + dx * sin_a + dy * cos_a
+    ]
+  end
+
+  private
+
+  # Build a solid closed shape for the track piece (not railroad style)
+  def build_solid_shape(points)
+    return nil if points.nil? || points.length < 2
+
+    half_width = @total_width / 2.0
+
+    left_edge = []
+    right_edge = []
+
+    points.each_with_index do |pt, i|
+      # Calculate tangent direction
+      if i == 0
+        next_pt = points[[1, points.length - 1].min]
+        dx = next_pt[0] - pt[0]
+        dy = next_pt[1] - pt[1]
+      elsif i == points.length - 1
+        prev_pt = points[i - 1]
+        dx = pt[0] - prev_pt[0]
+        dy = pt[1] - prev_pt[1]
+      else
+        prev_pt = points[i - 1]
+        next_pt = points[i + 1]
+        dx = next_pt[0] - prev_pt[0]
+        dy = next_pt[1] - prev_pt[1]
+      end
+
+      len = Math.sqrt(dx * dx + dy * dy)
+      next if len < 0.001
+
+      # Perpendicular direction
+      norm_x = -dy / len
+      norm_y = dx / len
+
+      left_edge << [pt[0] + norm_x * half_width, pt[1] + norm_y * half_width]
+      right_edge << [pt[0] - norm_x * half_width, pt[1] - norm_y * half_width]
+    end
+
+    return nil if left_edge.length < 2
+
+    # Build closed polygon: left edge forward, right edge backward
+    left_edge + right_edge.reverse
+  end
+
+  def calculate_layout(pieces)
+    positions = []
+    current_x = LAYOUT_PADDING
+    current_y = LAYOUT_PADDING + LABEL_OFFSET + 0.5  # Extra space for labels at top
+    row_max_x = 0
+    max_width = 36  # Max layout width in inches
+
+    pieces.each do |piece|
+      piece_width = piece[:width] + LAYOUT_PADDING
+      piece_height = piece[:height] + LAYOUT_PADDING
+
+      # Move to next row if this piece would exceed max width
+      if current_x + piece_width > max_width && current_x > LAYOUT_PADDING + 1
+        current_x = LAYOUT_PADDING
+        current_y = row_max_x + LAYOUT_PADDING
+      end
+
+      positions << {
+        piece_num: piece[:piece_num],
+        x: current_x,
+        y: current_y,
+        width: piece[:width],
+        height: piece[:height]
+      }
+
+      current_x += piece_width
+      row_max_x = [row_max_x, current_y + piece_height].max
+    end
+
+    # Calculate total dimensions
+    total_width = [positions.map { |p| p[:x] + p[:width] }.max + LAYOUT_PADDING, max_width].min
+    total_height = row_max_x + LAYOUT_PADDING
+
+    # Add space for calibration block and notes
+    total_height += CALIBRATION_SIZE + LAYOUT_PADDING * 3
+
+    { positions: positions, width: total_width, height: total_height }
+  end
+
+  def generate_svg(layout, pieces)
+    width = layout[:width].ceil
+    height = layout[:height].ceil
+
+    svg = <<~SVG
+      <?xml version="1.0" encoding="UTF-8"?>
+      <svg xmlns="http://www.w3.org/2000/svg"
+           width="#{width}in"
+           height="#{height}in"
+           viewBox="0 0 #{width} #{height}">
+      <style>
+        .track { fill: #333333; stroke: none; }
+        .label { font-family: Arial, sans-serif; font-weight: bold; fill: #333; }
+        .note { font-family: Arial, sans-serif; font-size: 0.2px; fill: #666; }
+        .calibration { fill: #333333; stroke: none; }
+      </style>
+      <rect width="100%" height="100%" fill="white" />
+      <defs>
+      <pattern id="background-grid" width="1.0" height="1.0" patternUnits="userSpaceOnUse">
+      <path d="M 1.0 0 L 0 0 0 1.0" fill="none" stroke="#CCCCCC" stroke-width="0.02"/>
+      </pattern>
+      </defs>
+      <rect x="0" y="0" width="#{width}" height="#{height}" fill="url(#background-grid)"/>
+    SVG
+
+    # Add each piece
+    layout[:positions].each_with_index do |pos, idx|
+      piece = pieces[idx]
+      translate_x = pos[:x]
+      translate_y = pos[:y]
+
+      # Solid track shape
+      track_path = polygon_to_path(piece[:shape_pts], translate_x, translate_y)
+      svg += %(<path d="#{track_path}" class="track" />\n)
+
+      # Piece label - positioned above the piece
+      label_x = translate_x + piece[:width] / 2
+      label_y = translate_y - LABEL_OFFSET
+      font_size = 0.4
+
+      svg += %(<text x="#{label_x.round(3)}" y="#{label_y.round(3)}" class="label" style="font-size: #{font_size.round(2)}px;" text-anchor="middle" dominant-baseline="middle">#{piece[:piece_num]}</text>\n)
+    end
+
+    # Add calibration block at bottom right
+    cal_x = width - CALIBRATION_SIZE - LAYOUT_PADDING
+    cal_y = height - CALIBRATION_SIZE - LAYOUT_PADDING
+    svg += %(<rect x="#{cal_x}" y="#{cal_y}" width="#{CALIBRATION_SIZE}" height="#{CALIBRATION_SIZE}" class="calibration" />\n)
+    svg += %(<text x="#{LAYOUT_PADDING}" y="#{height - LAYOUT_PADDING / 2}" class="note">Cut depth: #{SIDEWALL_HEIGHT_IN}\" | Channel width: #{@inner_width}\" | Calibration: #{CALIBRATION_SIZE}\"x#{CALIBRATION_SIZE}\"</text>\n)
+
+    svg += "</svg>\n"
+    svg
+  end
+
+  def polygon_to_path(points, offset_x = 0, offset_y = 0)
+    return "" if points.nil? || points.length < 3
+
+    translated = points.map { |p| [p[0] + offset_x, p[1] + offset_y] }
+
+    commands = ["M #{translated.first[0].round(3)} #{translated.first[1].round(3)}"]
+    translated[1..-1].each do |pt|
+      commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+    end
+    commands << "Z"
+    commands.join(" ")
   end
 end
 
@@ -1769,8 +2064,12 @@ unless File.exist?(INPUT_FILE)
 end
 
 visualizer = SplitVisualizer.new(INPUT_FILE, OUTPUT_FILE)
-visualizer.generate
+piece_data = visualizer.generate
+
+# Generate piece layout
+piece_layout = PieceLayoutGenerator.new(piece_data, INNER_TRACK_WIDTH_IN, SIDEWALL_THICKNESS_IN)
+piece_layout.generate
 
 puts ""
 print 'Opening in Cursor...'
-# system("cursor", OUTPUT_FILE)
+system("cursor", PIECES_FILE)
