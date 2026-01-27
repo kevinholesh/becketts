@@ -51,6 +51,11 @@ SIDEWALL_HEIGHT_IN = 0.375     # Height of the side walls
 # Total track width = inner channel + two sidewalls
 TOTAL_TRACK_WIDTH_IN = INNER_TRACK_WIDTH_IN + (SIDEWALL_THICKNESS_IN * 2)
 
+# Convert inner edge radius to centerline radius
+def centerline_radius_from_inner_edge_radius(inner_edge_radius)
+  inner_edge_radius + INNER_TRACK_WIDTH_IN / 2.0
+end
+
 # Turning constraints (in inches)
 # Minimum radius should be at least 1.5x car length for smooth turns
 MIN_TURN_RADIUS_IN = 4.5
@@ -90,6 +95,10 @@ STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a strai
 # For pieces that need custom geometry (like smoothing a tight chicane), specify the
 # piece number and the override method to call. The method receives start/end points
 # and returns an array of points for the new path.
+#
+# NOTE: All radius values are CENTERLINE radii (distance from arc center to track centerline).
+# Use centerline_radius_from_inner_edge_radius(inner_edge) to convert from inner edge radius.
+# Example: centerline_radius_from_inner_edge_radius(2.5) = 3.375" (2.5" inner edge + 0.875" half-width)
 PIECE_OVERRIDES = {
   2 => {  # Adjust last turn to avoid piece 3/8 collision
     segments: [
@@ -98,9 +107,9 @@ PIECE_OVERRIDES = {
   },
   3 => {  # Chicane with three turns
     segments: [
-      { type: :turn, radius: 2.5, angle: 110, direction: :right },
-      { type: :turn, radius: 2.5, angle: 140, direction: :left },
-      { type: :turn, radius: 2.5, angle: 60, direction: :left },
+      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 110, direction: :right },
+      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 140, direction: :left },
+      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 60, direction: :left },
     ],
   },
   4 => {  # Shortened straight
@@ -109,8 +118,8 @@ PIECE_OVERRIDES = {
   },
   12 => {
     segments: [
-      { type: :turn, radius: 2.5, angle: 90, direction: :left },
-      { type: :turn, radius: 3.0, angle: 110, direction: :right },
+      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 80, direction: :left },
+      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 100, direction: :right },
     ],
   },
 }
