@@ -4,6 +4,36 @@
 # Generates SVG pieces for CNC cutting from walnut wood
 # Optimized for Hot Wheels Premium F1 cars
 
+require_relative 'track_segmenter'
+require_relative 'blue_track_builder'
+
+#===============================================================================
+# BLUE TRACK PRIMITIVE CHAIN
+#===============================================================================
+# This defines the blue (edit) track as a sequence of arcs and straights.
+# Edit these values to reshape the track. The red ghost track shows the original.
+#
+# Each primitive is either:
+#   { type: :straight, length: X }           - straight segment of X inches
+#   { type: :straight, length: X, angle: A }        - straight at absolute angle A (0=right, 90=down)
+#   { type: :straight, length: X, angle_offset: O } - straight rotated O degrees from current dir
+#   { type: :turn, radius: R, angle: A, direction: :left/:right }  - arc segment
+#
+# Net turn angle should sum to ~360 (clockwise) or ~-360 (counter-clockwise)
+# for the track to close properly.
+
+# IMPORTANT: Never overwrite this definition...
+BLUE_TRACK_DEFINITION = [
+  { type: :straight, length: 13.6, angle_offset: -4.7 },
+  { type: :turn, radius: 5, angle: 62.0, direction: :right },
+  { type: :straight, length: 2.7 },
+  { type: :turn, radius: 5, angle: 47.0, direction: :left },
+  { type: :straight, length: 4.5 },
+]
+
+# Debug: Set to true to re-analyze the original track and print a new primitive chain
+GENERATE_TRACK_DEFINITION = false
+
 #===============================================================================
 # CONFIGURATION
 #===============================================================================
@@ -152,17 +182,17 @@ START_FINISH_T = 0.515
 # All splits in normalized coordinates (t=0.0 is split 1, increases in racing direction)
 # Split 1 is automatically at t=0.0
 MANUAL_SPLITS = [
-  0.04,
-  0.115,
-  0.261,
-  0.285,
-  0.365, # Maybe rethink this one
-  0.448,
-  0.56,
-  0.60,
-  0.745,
-  0.82,
-  0.89,
+  # 0.04,
+  # 0.115,
+  # 0.261,
+  # 0.285,
+  # 0.365, # Maybe rethink this one
+  # 0.448,
+  # 0.56,
+  # 0.60,
+  # 0.745,
+  # 0.82,
+  # 0.89,
 ]
 
 
@@ -186,8 +216,8 @@ GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
 # Edit path settings - shows the editable centerline for curve editing
 SHOW_EDIT_PATH = true             # Enable blue edit path overlay
 EDIT_PATH_COLOR = '#0066FF'       # Blue for edit path
-EDIT_PATH_WIDTH_IN = 0.5         # Thicker line for visibility
-EDIT_PATH_OPACITY = 0.8          # Higher opacity for editing focus
+EDIT_PATH_WIDTH_IN = 0.8         # Thicker line for visibility
+EDIT_PATH_OPACITY = 0.5          # Semi-transparent for overlay
 
 # Rendering toggles - disable to focus on path editing
 SHOW_SIDEWALLS = false           # Render the U-shaped track profile
@@ -1333,6 +1363,11 @@ class SplitVisualizer
   # This ensures offsets propagate correctly between connected pieces
   # Returns: { path: String, piece_data: Array of {piece_num, t_start, t_end, points} }
   def build_modified_path(analyzer, splits, original_path_data, splits_normalized)
+    # Check if we should use the blue track definition
+    if defined?(BLUE_TRACK_DEFINITION) && BLUE_TRACK_DEFINITION.is_a?(Array) && BLUE_TRACK_DEFINITION.any?
+      return build_path_from_definition(analyzer, splits_normalized)
+    end
+
     # Build piece chain in racing order
     piece_chain = build_piece_chain_racing_order(analyzer, splits_normalized)
 
@@ -1344,6 +1379,91 @@ class SplitVisualizer
 
     # Now build the SVG path in raw-t order for rendering
     build_path_from_chain(analyzer, piece_chain)
+  end
+
+  # Build the entire blue track from BLUE_TRACK_DEFINITION and split it into pieces
+  def build_path_from_definition(analyzer, splits_normalized)
+    # Get starting point and direction from the red track at START_FINISH_T
+    start_pt = analyzer.point_at(START_FINISH_T)
+    start_tangent = analyzer.tangent_at(START_FINISH_T)
+
+    # Racing direction is opposite to raw t direction, so negate the tangent
+    start_dir = [-start_tangent[0], -start_tangent[1]]
+
+    puts ""
+    puts "Building blue track from BLUE_TRACK_DEFINITION (#{BLUE_TRACK_DEFINITION.length} primitives)"
+
+    # Build the complete blue track
+    builder = BlueTrackBuilder.new(BLUE_TRACK_DEFINITION, start_pt, start_dir)
+    all_points = builder.build
+
+    closure_gap = builder.closure_gap
+    puts "  Generated #{all_points.length} points, total length: #{builder.path_length.round(2)}\""
+    puts "  Closure gap: #{closure_gap.round(2)}\" (track end to start distance)"
+    if closure_gap > 1.0
+      puts "  WARNING: Track does not close properly. Adjust primitive angles/radii to close the loop."
+    end
+
+    # Calculate cumulative distances along the track for splitting
+    cumulative_dist = [0.0]
+    (1...all_points.length).each do |i|
+      dx = all_points[i][0] - all_points[i-1][0]
+      dy = all_points[i][1] - all_points[i-1][1]
+      cumulative_dist << cumulative_dist.last + Math.sqrt(dx*dx + dy*dy)
+    end
+    total_length = cumulative_dist.last
+
+    # Split the track into pieces based on normalized t values
+    # splits_normalized is [0.0, 0.04, 0.115, ...] where each value is a fraction of the lap
+    num_pieces = splits_normalized.length
+    piece_data = []
+
+    (1..num_pieces).each do |piece_num|
+      norm_start = splits_normalized[piece_num - 1]
+      norm_end = piece_num < num_pieces ? splits_normalized[piece_num] : 1.0
+
+      # Convert normalized t to distance along the blue track
+      dist_start = norm_start * total_length
+      dist_end = norm_end * total_length
+
+      # Find point indices for this piece
+      start_idx = cumulative_dist.index { |d| d >= dist_start } || 0
+      end_idx = cumulative_dist.index { |d| d >= dist_end } || (all_points.length - 1)
+
+      # Ensure we have at least 2 points
+      end_idx = [end_idx, start_idx + 1].max if end_idx <= start_idx
+
+      # Extract points for this piece
+      piece_pts = all_points[start_idx..end_idx]
+
+      # Convert to raw t values for compatibility with the rest of the system
+      raw_start = (START_FINISH_T - norm_start + 1.0) % 1.0
+      raw_end = (START_FINISH_T - norm_end + 1.0) % 1.0
+
+      # Points are in racing order, but piece_data expects raw-t order (reversed)
+      piece_data << {
+        piece_num: piece_num,
+        t_start: raw_end,    # In raw-t order, piece starts at raw_end
+        t_end: raw_start,    # and ends at raw_start
+        points: piece_pts.reverse  # Reverse to raw-t order
+      }
+    end
+
+    # Build SVG path from all points
+    path_commands = []
+    if all_points.any?
+      # Reverse to raw-t order for SVG path
+      raw_t_points = all_points.reverse
+      first_pt = raw_t_points.first
+      path_commands << "M #{first_pt[0].round(3)} #{first_pt[1].round(3)}"
+      raw_t_points[1..-1].each do |pt|
+        path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+      end
+    end
+    # Don't close the path - leave it open for manual tracing
+    # path_commands << "Z"
+
+    { path: path_commands.join(" "), piece_data: piece_data }
   end
 
   # Phase 1: Build piece chain in racing order with original endpoints
@@ -1968,6 +2088,21 @@ class SplitVisualizer
     puts "  Split points found: #{splits.length}"
     puts ""
 
+    # Generate track definition if requested
+    if GENERATE_TRACK_DEFINITION
+      segmenter = TrackSegmenter.new(analyzer, start_t: START_FINISH_T)
+      segmenter.segment
+      segmenter.print_summary
+
+      puts ""
+      puts "=" * 60
+      puts "COPY THIS INTO BLUE_TRACK_DEFINITION:"
+      puts "=" * 60
+      puts segmenter.generate_definition_code
+      puts "=" * 60
+      puts ""
+    end
+
     # Split lines will be generated later from piece_data (the blue edit path)
     # This ensures split lines appear on the actual track being built, not the ghost track
     split_lines = []
@@ -2493,4 +2628,4 @@ visualizer.generate
 
 puts ""
 print 'Opening in Cursor...'
-system("cursor", OUTPUT_FILE)
+# system("cursor", OUTPUT_FILE)
