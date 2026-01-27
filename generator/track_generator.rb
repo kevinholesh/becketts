@@ -143,7 +143,7 @@ BLUE_TRACK_DEFINITION = [
   { type: :straight, length: 9.65 },
   { type: :turn, radius: MIN_TURN_RADIUS_IN, angle: 100, direction: :left },
   { type: :turn, radius: 3, angle: 171, direction: :right },
-  { type: :straight, length: 4.5 },
+  { type: :straight, length: 4 },
 ]
 
 #===============================================================================
@@ -160,17 +160,17 @@ START_FINISH_T = 0.515
 # All splits in normalized coordinates (t=0.0 is split 1, increases in racing direction)
 # Split 1 is automatically at t=0.0
 MANUAL_SPLITS = [
-  # 0.04,
-  # 0.115,
-  # 0.261,
-  # 0.285,
-  # 0.365, # Maybe rethink this one
-  # 0.448,
-  # 0.56,
-  # 0.60,
-  # 0.745,
-  # 0.82,
-  # 0.89,
+  0.06,
+  0.13,
+  0.215,
+  0.31,
+  # # 0.365, # Maybe rethink this one
+  0.425,
+  0.524,
+  0.595,
+  0.715,
+  0.84,
+  0.915,
 ]
 
 
@@ -196,12 +196,12 @@ SHOW_EDIT_PATH = true             # Enable blue edit path overlay
 EDIT_PATH_COLOR = '#0066FF'       # Blue for edit path
 EDIT_PATH_WIDTH_IN = 0.8         # Thicker line for visibility
 EDIT_PATH_OPACITY = 0.5          # Semi-transparent for overlay
-EDIT_PATH_MULTI_COLOR = true     # Different shade of blue for each primitive (helps with tracing)
+EDIT_PATH_MULTI_COLOR = false    # Different shade of blue for each primitive (helps with tracing)
 
 # Rendering toggles - disable to focus on path editing
-SHOW_SIDEWALLS = false           # Render the U-shaped track profile
+SHOW_SIDEWALLS = true            # Render the U-shaped track profile
 SHOW_TEST_CARS = false            # Render test car visualizations
-SHOW_WOOD_GRAIN = false          # Render grain direction lines
+SHOW_WOOD_GRAIN = true           # Render grain direction lines
 
 # Tight radius warning visualization
 SHOW_TIGHT_RADIUS_WARNINGS = false # Highlight curves that are too tight for cars

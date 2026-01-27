@@ -73,6 +73,21 @@ class BlueTrackBuilder
       end
     end
 
+    # Add smooth connector back to start point
+    end_dir = current_dir
+    connector_pts = build_smooth_connector(current_pt, end_dir, @start_pt, @start_dir, 30)
+    @segments << { index: @definition.length, type: :connector, points: connector_pts }
+    @points += connector_pts[1..-1]  # Skip first (already added)
+
+    # Update path length with connector
+    connector_length = 0.0
+    (1...connector_pts.length).each do |i|
+      dx = connector_pts[i][0] - connector_pts[i-1][0]
+      dy = connector_pts[i][1] - connector_pts[i-1][1]
+      connector_length += Math.sqrt(dx*dx + dy*dy)
+    end
+    @path_length += connector_length
+
     @points
   end
 
@@ -183,5 +198,36 @@ class BlueTrackBuilder
       initial_tangent[0] * cos_a - initial_tangent[1] * sin_a,
       initial_tangent[0] * sin_a + initial_tangent[1] * cos_a
     ]
+  end
+
+  # Build a smooth bezier connector between two points with specified tangent directions
+  def build_smooth_connector(start_pt, start_dir, end_pt, end_dir, num_points)
+    dist = Math.sqrt((end_pt[0] - start_pt[0])**2 + (end_pt[1] - start_pt[1])**2)
+    ctrl_dist = dist * 0.4
+
+    p0 = start_pt
+    p1 = [start_pt[0] + start_dir[0] * ctrl_dist, start_pt[1] + start_dir[1] * ctrl_dist]
+    p2 = [end_pt[0] - end_dir[0] * ctrl_dist, end_pt[1] - end_dir[1] * ctrl_dist]
+    p3 = end_pt
+
+    points = []
+    num_points.times do |i|
+      t = i.to_f / (num_points - 1)
+      points << cubic_bezier_point(p0, p1, p2, p3, t)
+    end
+    points
+  end
+
+  # Evaluate cubic bezier at parameter t (0..1)
+  def cubic_bezier_point(p0, p1, p2, p3, t)
+    mt = 1 - t
+    mt2 = mt * mt
+    mt3 = mt2 * mt
+    t2 = t * t
+    t3 = t2 * t
+
+    x = mt3 * p0[0] + 3 * mt2 * t * p1[0] + 3 * mt * t2 * p2[0] + t3 * p3[0]
+    y = mt3 * p0[1] + 3 * mt2 * t * p1[1] + 3 * mt * t2 * p2[1] + t3 * p3[1]
+    [x, y]
   end
 end
