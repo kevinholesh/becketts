@@ -107,7 +107,7 @@ PIECE_OVERRIDES = {
     segments: [],
     entry_offset: 4.0,  # inches to shorten at racing entry (affects blue line, propagates to next pieces)
   },
-  11 => { # Two turns (left then right)
+  12 => {
     segments: [
       { type: :turn, radius: 2.5, angle: 90, direction: :left },
       { type: :turn, radius: 3.0, angle: 110, direction: :right },
@@ -137,7 +137,7 @@ MANUAL_SPLITS = [
   0.261,
   0.285,
   0.365, # Maybe rethink this one
-  0.457,
+  0.448,
   0.56,
   0.60,
   0.745,
@@ -451,14 +451,18 @@ class PieceOverrideGenerator
   end
 
   # Build an arc starting at a point with given tangent direction
+  # Note: SVG has Y increasing downward, so we flip directions to match visual intuition
+  # When user specifies :left, the track visually turns left (counter-clockwise in SVG coords)
+  # When user specifies :right, the track visually turns right (clockwise in SVG coords)
   def self.build_arc_from_tangent(start_pt, tangent_dir, radius, angle_degrees, direction, num_points)
     angle_rad = angle_degrees * Math::PI / 180.0
 
     # Perpendicular to tangent (points toward arc center)
-    perp = if direction == :right
-      [tangent_dir[1], -tangent_dir[0]]  # 90° clockwise
+    # Flipped for SVG coordinate system (Y down)
+    perp = if direction == :left
+      [tangent_dir[1], -tangent_dir[0]]  # Visual left turn in SVG
     else
-      [-tangent_dir[1], tangent_dir[0]]  # 90° counter-clockwise
+      [-tangent_dir[1], tangent_dir[0]]  # Visual right turn in SVG
     end
 
     # Arc center
@@ -468,11 +472,11 @@ class PieceOverrideGenerator
     # Starting angle (from center to start point)
     start_angle = Math.atan2(start_pt[1] - cy, start_pt[0] - cx)
 
-    # End angle depends on direction
-    end_angle = if direction == :right
-      start_angle - angle_rad  # Clockwise
+    # End angle depends on direction (flipped for SVG)
+    end_angle = if direction == :left
+      start_angle - angle_rad  # Visual left in SVG
     else
-      start_angle + angle_rad  # Counter-clockwise
+      start_angle + angle_rad  # Visual right in SVG
     end
 
     # Generate arc points
@@ -486,9 +490,10 @@ class PieceOverrideGenerator
   end
 
   # Calculate tangent direction at end of an arc
+  # Flipped for SVG coordinate system (Y down) to match build_arc_from_tangent
   def self.tangent_at_arc_end(initial_tangent, angle_degrees, direction)
     angle_rad = angle_degrees * Math::PI / 180.0
-    angle_rad = -angle_rad if direction == :right
+    angle_rad = -angle_rad if direction == :left  # Flipped for SVG
 
     cos_a = Math.cos(angle_rad)
     sin_a = Math.sin(angle_rad)
@@ -1304,101 +1309,370 @@ class SplitVisualizer
     svg
   end
 
-  # Build a modified path that straightens "straight enough" pieces
+  # Build a modified path using racing-order piece chain
+  # This ensures offsets propagate correctly between connected pieces
   # Returns: { path: String, piece_data: Array of {piece_num, t_start, t_end, points} }
   def build_modified_path(analyzer, splits, original_path_data, splits_normalized)
-    # Get all t-values where we need to check for straightening
-    # These are the boundaries between pieces
-    all_t_values = splits.dup.sort
+    # Build piece chain in racing order
+    piece_chain = build_piece_chain_racing_order(analyzer, splits_normalized)
 
-    # Ensure we have 0.0 and 1.0
-    all_t_values.unshift(0.0) unless all_t_values.first == 0.0
-    all_t_values.push(1.0) unless all_t_values.last == 1.0
-    all_t_values = all_t_values.sort.uniq
+    # Apply offsets and propagate changes in racing order
+    apply_offsets_racing_order(piece_chain)
 
-    # Build a mapping from raw t ranges to piece numbers
-    piece_t_ranges = build_piece_t_ranges(splits, splits_normalized)
+    # Generate geometry for each piece
+    generate_piece_geometries(analyzer, piece_chain)
 
-    # Build the path by going through each segment
-    path_commands = []
-    first_point = analyzer.point_at(0.0)
-    path_commands << "M #{first_point[0].round(3)} #{first_point[1].round(3)}"
+    # Now build the SVG path in raw-t order for rendering
+    build_path_from_chain(analyzer, piece_chain)
+  end
 
-    straightened_pieces = []
-    piece_data = []  # Store piece info for per-piece rendering
+  # Phase 1: Build piece chain in racing order with original endpoints
+  def build_piece_chain_racing_order(analyzer, splits_normalized)
+    num_pieces = splits_normalized.length
+    chain = []
 
-    # Track the current endpoint as we build - this allows shortened pieces to affect subsequent ones
-    current_end_pt = first_point
+    (1..num_pieces).each do |piece_num|
+      # Get normalized t range for this piece (racing order)
+      norm_start = splits_normalized[piece_num - 1]
+      norm_end = piece_num < num_pieces ? splits_normalized[piece_num] : 1.0
 
-    (0...all_t_values.length - 1).each do |i|
-      t_start = all_t_values[i]
-      t_end = all_t_values[i + 1]
+      # Convert to raw t values
+      raw_start = (START_FINISH_T - norm_start + 1.0) % 1.0
+      raw_end = (START_FINISH_T - norm_end + 1.0) % 1.0
 
-      # Find which piece number this segment belongs to
-      piece_num = find_piece_number(t_start, t_end, piece_t_ranges)
+      # Get original points for this piece
+      # Raw t goes opposite to racing direction, so raw_start is racing entry, raw_end is racing exit
+      original_pts = get_piece_points_by_raw_t(analyzer, raw_start, raw_end)
 
-      # Check for overrides FIRST (before straightening)
-      if PIECE_OVERRIDES.key?(piece_num)
-        # Apply custom geometry override for this piece
-        original_pts = analyzer.piece_points(t_start, t_end)
-        # Use current_end_pt as start (connects to previous piece's actual end)
-        start_pt = current_end_pt
-        end_pt = original_pts.last
+      # Racing entry is at raw_start, racing exit is at raw_end
+      racing_entry_pt = original_pts.first.dup
+      racing_exit_pt = original_pts.last.dup
 
-        # Calculate entry and exit directions from original path
-        entry_dir = [original_pts[1][0] - original_pts[0][0], original_pts[1][1] - original_pts[0][1]]
-        exit_dir = [original_pts[-1][0] - original_pts[-2][0], original_pts[-1][1] - original_pts[-2][1]]
-
-        # Build piece from segments
-        override_config = PIECE_OVERRIDES[piece_num]
-        segments = override_config[:segments] || []
-        options = {
-          entry_offset: override_config[:entry_offset],
-          exit_offset: override_config[:exit_offset]
-        }
-        piece_pts = PieceOverrideGenerator.build_piece_from_segments(original_pts, start_pt, end_pt, entry_dir, exit_dir, segments, options)
-
-        @overridden_pieces ||= []
-        @overridden_pieces << [piece_num, original_pts.length, piece_pts.length]
-
-        piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: piece_pts }
-
-        # Skip the first point (it's the end of the previous segment)
-        piece_pts[1..-1].each do |pt|
-          path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
-        end
-
-        # Update current endpoint to this piece's actual end
-        current_end_pt = piece_pts.last
-      elsif analyzer.is_piece_straight?(t_start, t_end)
-        # Straighten pieces that are nearly straight
-        end_point = analyzer.point_at(t_end)
-        path_commands << "L #{end_point[0].round(3)} #{end_point[1].round(3)}"
-        straightened_pieces << [t_start, t_end, piece_num]
-        piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: [current_end_pt, end_point] }
-        current_end_pt = end_point
+      # Calculate directions at entry and exit (in racing direction)
+      # Entry direction: from first point toward second point (into the piece)
+      # Exit direction: from second-to-last toward last point (out of the piece)
+      if original_pts.length >= 2
+        racing_entry_dir = [
+          original_pts[1][0] - original_pts[0][0],
+          original_pts[1][1] - original_pts[0][1]
+        ]
+        racing_exit_dir = [
+          original_pts[-1][0] - original_pts[-2][0],
+          original_pts[-1][1] - original_pts[-2][1]
+        ]
       else
-        # Use the original curve points as a polyline
-        piece_pts = analyzer.piece_points(t_start, t_end)
+        racing_entry_dir = [1, 0]
+        racing_exit_dir = [1, 0]
+      end
 
-        # Replace first point with current_end_pt to maintain connectivity
-        piece_pts[0] = current_end_pt
+      # Normalize directions
+      entry_len = Math.sqrt(racing_entry_dir[0]**2 + racing_entry_dir[1]**2)
+      exit_len = Math.sqrt(racing_exit_dir[0]**2 + racing_exit_dir[1]**2)
+      if entry_len > 0.001
+        racing_entry_dir = [racing_entry_dir[0] / entry_len, racing_entry_dir[1] / entry_len]
+      end
+      if exit_len > 0.001
+        racing_exit_dir = [racing_exit_dir[0] / exit_len, racing_exit_dir[1] / exit_len]
+      end
 
-        piece_data << { piece_num: piece_num, t_start: t_start, t_end: t_end, points: piece_pts }
+      chain << {
+        piece_num: piece_num,
+        norm_start: norm_start,
+        norm_end: norm_end,
+        raw_start: raw_start,
+        raw_end: raw_end,
+        original_pts: original_pts,
+        racing_entry_pt: racing_entry_pt,
+        racing_exit_pt: racing_exit_pt,
+        racing_entry_dir: racing_entry_dir,
+        racing_exit_dir: racing_exit_dir,
+        generated_pts: nil  # Will be filled in phase 3
+      }
+    end
 
-        # Skip the first point (it's the end of the previous segment)
-        piece_pts[1..-1].each do |pt|
-          path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+    chain
+  end
+
+  # Get piece points given raw t range (handles wrap-around)
+  def get_piece_points_by_raw_t(analyzer, raw_start, raw_end)
+    # Raw t decreases in racing direction (raw_start > raw_end for non-wrapping pieces)
+    # We need points from raw_start down to raw_end
+
+    total_points = analyzer.points.length
+    start_idx = (raw_start * (total_points - 1)).round
+    end_idx = (raw_end * (total_points - 1)).round
+
+    start_idx = [[start_idx, 0].max, total_points - 1].min
+    end_idx = [[end_idx, 0].max, total_points - 1].min
+
+    if start_idx >= end_idx
+      # Normal case: raw_start > raw_end, indices go down
+      # Return points from start_idx down to end_idx (in racing order)
+      analyzer.points[end_idx..start_idx].reverse
+    else
+      # Wrap case: piece crosses t=0
+      # Points from start_idx down to 0, then from end down to end_idx
+      part1 = analyzer.points[0..start_idx].reverse
+      part2 = analyzer.points[end_idx..-1].reverse
+      part1 + part2
+    end
+  end
+
+  # Phase 2: Apply offsets and propagate changes in racing order
+  def apply_offsets_racing_order(piece_chain)
+    num_pieces = piece_chain.length
+
+    # Process in racing order (piece 1, 2, 3, ...)
+    piece_chain.each_with_index do |piece, idx|
+      piece_num = piece[:piece_num]
+      next unless PIECE_OVERRIDES.key?(piece_num)
+
+      override = PIECE_OVERRIDES[piece_num]
+
+      # Apply entry_offset: move racing entry forward (into the piece)
+      if override[:entry_offset] && override[:entry_offset] > 0
+        offset = override[:entry_offset]
+        dir = piece[:racing_entry_dir]
+
+        # Move entry point forward along racing direction
+        piece[:racing_entry_pt] = [
+          piece[:racing_entry_pt][0] + dir[0] * offset,
+          piece[:racing_entry_pt][1] + dir[1] * offset
+        ]
+
+        # Propagate to previous piece's exit (they must connect)
+        prev_idx = (idx - 1 + num_pieces) % num_pieces
+        piece_chain[prev_idx][:racing_exit_pt] = piece[:racing_entry_pt].dup
+
+        puts "  Piece #{piece_num}: entry_offset #{offset}\" applied, propagated to piece #{piece_chain[prev_idx][:piece_num]} exit"
+      end
+
+      # Apply exit_offset: move racing exit backward (into the piece)
+      if override[:exit_offset] && override[:exit_offset] > 0
+        offset = override[:exit_offset]
+        dir = piece[:racing_exit_dir]
+
+        # Move exit point backward (opposite of exit direction)
+        piece[:racing_exit_pt] = [
+          piece[:racing_exit_pt][0] - dir[0] * offset,
+          piece[:racing_exit_pt][1] - dir[1] * offset
+        ]
+
+        # Propagate to next piece's entry (they must connect)
+        next_idx = (idx + 1) % num_pieces
+        piece_chain[next_idx][:racing_entry_pt] = piece[:racing_exit_pt].dup
+
+        puts "  Piece #{piece_num}: exit_offset #{offset}\" applied, propagated to piece #{piece_chain[next_idx][:piece_num]} entry"
+      end
+    end
+  end
+
+  # Phase 3: Generate geometry for each piece using updated endpoints
+  def generate_piece_geometries(analyzer, piece_chain)
+    @overridden_pieces = []
+
+    piece_chain.each do |piece|
+      piece_num = piece[:piece_num]
+
+      if PIECE_OVERRIDES.key?(piece_num)
+        override = PIECE_OVERRIDES[piece_num]
+        segments = override[:segments] || []
+
+        # Build piece from racing entry to racing exit using segments
+        piece[:generated_pts] = build_override_piece_racing_order(
+          piece[:racing_entry_pt],
+          piece[:racing_exit_pt],
+          piece[:racing_entry_dir],
+          piece[:racing_exit_dir],
+          segments
+        )
+
+        @overridden_pieces << [piece_num, piece[:original_pts].length, piece[:generated_pts].length]
+      elsif is_piece_nearly_straight?(piece[:original_pts])
+        # Straighten to just entry and exit
+        piece[:generated_pts] = [piece[:racing_entry_pt], piece[:racing_exit_pt]]
+      else
+        # Use original geometry but with updated endpoints
+        piece[:generated_pts] = interpolate_piece_with_endpoints(
+          piece[:original_pts],
+          piece[:racing_entry_pt],
+          piece[:racing_exit_pt]
+        )
+      end
+    end
+  end
+
+  # Build override piece geometry in racing order (entry to exit)
+  def build_override_piece_racing_order(entry_pt, exit_pt, entry_dir, exit_dir, segments)
+    all_points = [entry_pt.dup]
+    current_pt = entry_pt.dup
+    current_dir = entry_dir.dup
+
+    segments.each do |seg|
+      case seg[:type]
+      when :straight
+        if seg[:distance] && seg[:distance] > 0
+          straight_pts = PieceOverrideGenerator.build_straight_run(current_pt, current_dir, seg[:distance], 10)
+          all_points += straight_pts[1..-1]
+          current_pt = straight_pts.last
         end
-
-        current_end_pt = piece_pts.last
+      when :turn
+        turn_pts = PieceOverrideGenerator.build_arc_from_tangent(
+          current_pt, current_dir, seg[:radius], seg[:angle], seg[:direction], 40
+        )
+        all_points += turn_pts[1..-1]
+        current_pt = turn_pts.last
+        current_dir = PieceOverrideGenerator.tangent_at_arc_end(current_dir, seg[:angle], seg[:direction])
       end
     end
 
-    # Close the path
+    # Smooth connector to exit point
+    connector_pts = PieceOverrideGenerator.build_smooth_connector(current_pt, current_dir, exit_pt, exit_dir, 30)
+    all_points += connector_pts[1..-1]
+
+    all_points
+  end
+
+  # Check if piece points are nearly straight
+  def is_piece_nearly_straight?(points)
+    return true if points.length < 3
+
+    # Calculate average deviation from straight line
+    start_pt = points.first
+    end_pt = points.last
+
+    dx = end_pt[0] - start_pt[0]
+    dy = end_pt[1] - start_pt[1]
+    length = Math.sqrt(dx**2 + dy**2)
+    return true if length < 0.001
+
+    total_deviation = 0
+    points[1..-2].each do |pt|
+      # Distance from point to line
+      t = ((pt[0] - start_pt[0]) * dx + (pt[1] - start_pt[1]) * dy) / (length * length)
+      closest_x = start_pt[0] + t * dx
+      closest_y = start_pt[1] + t * dy
+      deviation = Math.sqrt((pt[0] - closest_x)**2 + (pt[1] - closest_y)**2)
+      total_deviation += deviation
+    end
+
+    avg_deviation = total_deviation / [points.length - 2, 1].max
+    avg_deviation / length < STRAIGHTEN_THRESHOLD
+  end
+
+  # Interpolate original piece geometry with new endpoints
+  def interpolate_piece_with_endpoints(original_pts, new_entry, new_exit)
+    return [new_entry, new_exit] if original_pts.length < 2
+
+    old_entry = original_pts.first
+    old_exit = original_pts.last
+
+    # Calculate transformation: translate and scale
+    old_dx = old_exit[0] - old_entry[0]
+    old_dy = old_exit[1] - old_entry[1]
+    new_dx = new_exit[0] - new_entry[0]
+    new_dy = new_exit[1] - new_entry[1]
+
+    old_len = Math.sqrt(old_dx**2 + old_dy**2)
+    new_len = Math.sqrt(new_dx**2 + new_dy**2)
+
+    return [new_entry, new_exit] if old_len < 0.001
+
+    # For each point, calculate its position relative to old entry/exit and map to new
+    original_pts.map.with_index do |pt, i|
+      if i == 0
+        new_entry.dup
+      elsif i == original_pts.length - 1
+        new_exit.dup
+      else
+        # Parameter along the piece (0 = entry, 1 = exit)
+        t = ((pt[0] - old_entry[0]) * old_dx + (pt[1] - old_entry[1]) * old_dy) / (old_len * old_len)
+
+        # Perpendicular offset from the centerline
+        perp_dist = ((pt[0] - old_entry[0]) * (-old_dy) + (pt[1] - old_entry[1]) * old_dx) / old_len
+
+        # Scale perpendicular distance by length ratio
+        scale = new_len / old_len
+        scaled_perp = perp_dist * scale
+
+        # New point position
+        base_x = new_entry[0] + t * new_dx
+        base_y = new_entry[1] + t * new_dy
+
+        # Add perpendicular offset
+        if new_len > 0.001
+          perp_x = -new_dy / new_len
+          perp_y = new_dx / new_len
+          [base_x + scaled_perp * perp_x, base_y + scaled_perp * perp_y]
+        else
+          [base_x, base_y]
+        end
+      end
+    end
+  end
+
+  # Phase 4: Build SVG path from piece chain (in raw-t order for rendering)
+  def build_path_from_chain(analyzer, piece_chain)
+    # Sort pieces by raw_end (ascending) to get raw-t processing order
+    # Raw t increases from 0 to 1, and each piece's raw_end is where it ends in raw-t order
+    sorted_pieces = piece_chain.sort_by { |p| p[:raw_end] }
+
+    # Handle wrap-around: find where raw t = 0 falls
+    # The path starts at raw t = 0
+    path_commands = []
+    piece_data = []
+    straightened_pieces = []
+
+    # Find the piece that contains raw t = 0 (or starts closest to it)
+    first_piece_idx = sorted_pieces.index { |p| p[:raw_end] <= p[:raw_start] } || 0
+
+    # Reorder to start from raw t = 0
+    ordered_pieces = sorted_pieces.rotate(first_piece_idx)
+
+    # Build path by iterating through pieces in raw-t order
+    # Use the first piece's first point (in raw-t order) as the path start
+    first_piece_started = false
+
+    ordered_pieces.each do |piece|
+      pts = piece[:generated_pts]
+      next unless pts && pts.length >= 2
+
+      # Points are in racing order (entry to exit)
+      # For raw-t order, we need to reverse them (raw t goes opposite to racing)
+      raw_t_pts = pts.reverse
+
+      # Record piece data
+      piece_data << {
+        piece_num: piece[:piece_num],
+        t_start: piece[:raw_end],  # In raw-t order, piece starts at raw_end
+        t_end: piece[:raw_start],  # and ends at raw_start
+        points: raw_t_pts
+      }
+
+      if raw_t_pts.length == 2 && !PIECE_OVERRIDES.key?(piece[:piece_num])
+        straightened_pieces << [piece[:raw_end], piece[:raw_start], piece[:piece_num]]
+      end
+
+      # Start path with the first piece's first point
+      if !first_piece_started
+        first_point = raw_t_pts.first
+        path_commands << "M #{first_point[0].round(3)} #{first_point[1].round(3)}"
+        first_piece_started = true
+        # Add remaining points (skip first since it's the M command)
+        raw_t_pts[1..-1].each do |pt|
+          path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+        end
+      else
+        # Add all points for subsequent pieces (skip first as it connects to previous)
+        raw_t_pts[1..-1].each do |pt|
+          path_commands << "L #{pt[0].round(3)} #{pt[1].round(3)}"
+        end
+      end
+    end
+
     path_commands << "Z"
 
-    # Report straightened pieces
+    # Report results
     if straightened_pieces.any?
       puts ""
       puts "Straightened Pieces:"
@@ -1407,7 +1681,6 @@ class SplitVisualizer
       end
     end
 
-    # Report overridden pieces
     if @overridden_pieces && @overridden_pieces.any?
       puts ""
       puts "Overridden Pieces (custom geometry):"
@@ -1611,28 +1884,9 @@ class SplitVisualizer
     puts "  Split points found: #{splits.length}"
     puts ""
 
-    # Generate split lines (no labels on splits - labels go on pieces)
+    # Split lines will be generated later from piece_data (the blue edit path)
+    # This ensures split lines appear on the actual track being built, not the ghost track
     split_lines = []
-
-    splits.each_with_index do |t, i|
-      split_num = i + 1
-      point = analyzer.point_at(t)
-      tangent = analyzer.tangent_at(t)
-
-      # Perpendicular to tangent
-      perp = [-tangent[1], tangent[0]]
-
-      # Create a line perpendicular to the track, contained within track boundaries
-      half_len = TRACK_OUTER_WIDTH_IN / 2.0
-      x1 = point[0] - perp[0] * half_len
-      y1 = point[1] - perp[1] * half_len
-      x2 = point[0] + perp[0] * half_len
-      y2 = point[1] + perp[1] * half_len
-
-      split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH_IN}"/>)
-
-      puts "  Split #{split_num}: t=#{t.round(3)} at (#{point[0].round(1)}, #{point[1].round(1)})"
-    end
 
     # Piece labels will be generated later after piece_data is available
     # (so labels align with the blue edit path for overridden pieces)
@@ -1735,7 +1989,7 @@ class SplitVisualizer
 </defs>)
       grid_rect = %(<rect x="#{viewbox_x}" y="#{viewbox_y}" width="#{viewbox_width}" height="#{viewbox_height}" fill="url(#background-grid)"/>)
     end
-    split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
+    # split_group will be created later after split_lines is populated from piece_data
 
     # Create ghost track if enabled - shows ORIGINAL track layout scaled to match output
     # This lets you compare the original curves vs simplified output at the same size
@@ -1785,6 +2039,50 @@ class SplitVisualizer
     path_result = build_modified_path(analyzer, splits, path_data, splits_normalized)
     modified_path_data = path_result[:path]
     piece_data = path_result[:piece_data]
+
+    # Generate split lines from piece_data (the blue edit path)
+    # Each piece's first point (in raw-t order) is where the split line should be
+    puts ""
+    puts "Split Points (from edit path):"
+    piece_data.each do |pd|
+      split_num = pd[:piece_num]
+      points = pd[:points]
+      next if points.empty?
+
+      # The first point of each piece is the split location
+      point = points.first
+
+      # Calculate tangent from first two points
+      if points.length >= 2
+        dx = points[1][0] - points[0][0]
+        dy = points[1][1] - points[0][1]
+        len = Math.sqrt(dx * dx + dy * dy)
+        if len > 0.001
+          tangent = [dx / len, dy / len]
+        else
+          tangent = [1.0, 0.0]
+        end
+      else
+        tangent = [1.0, 0.0]
+      end
+
+      # Perpendicular to tangent
+      perp = [-tangent[1], tangent[0]]
+
+      # Create a line perpendicular to the track
+      half_len = TRACK_OUTER_WIDTH_IN / 2.0
+      x1 = point[0] - perp[0] * half_len
+      y1 = point[1] - perp[1] * half_len
+      x2 = point[0] + perp[0] * half_len
+      y2 = point[1] + perp[1] * half_len
+
+      split_lines << %(<line x1="#{x1.round(3)}" y1="#{y1.round(3)}" x2="#{x2.round(3)}" y2="#{y2.round(3)}" stroke="#{SPLIT_LINE_COLOR}" stroke-width="#{SPLIT_LINE_WIDTH_IN}"/>)
+
+      puts "  Split #{split_num}: at (#{point[0].round(1)}, #{point[1].round(1)})"
+    end
+
+    # Create split_group now that split_lines is populated
+    split_group = %(<g id="split-lines">\n#{split_lines.join("\n")}\n</g>)
 
     # Now generate grain direction using piece_data (the blue edit path)
     if SHOW_GRAIN_DIRECTION && piece_data.any?
