@@ -17,6 +17,12 @@ ARC_DEGREES = 180  # degrees of arc (full half turn)
 PADDING = 0.5  # inches between pieces
 MIN_GAP = 0.12  # minimum gap between nested arcs for router bit
 
+# Background grid settings (matching track_generator.rb)
+SHOW_BACKGROUND_GRID = true
+GRID_SIZE_IN = 1.0                # Grid cell size in inches
+GRID_COLOR = '#CCCCCC'            # Light gray for subtle grid
+GRID_LINE_WIDTH_IN = 0.02         # Thin grid lines (inches)
+
 class TestPieceGenerator
   attr_reader :total_width, :total_height
 
@@ -42,20 +48,27 @@ class TestPieceGenerator
   def calculate_layout
     # For 180° arcs, arrange in a grid - each arc is outer_r wide × 2*outer_r tall
     # Arc from 90° to 270°: starts at bottom, curves left, ends at top
+    # Top-right point of each arc aligned to whole-inch grid coordinates
     @layout = []
     @column_positions = []
 
     max_outer = RADII.max + TRACK_WIDTHS.max / 2.0
-    arc_height = max_outer * 2  # 180° arc spans full diameter vertically
 
-    # Grid: 4 columns (widths) × 4 rows (radii)
+    # Round spacing to whole inches for grid alignment
+    col_spacing = (max_outer + PADDING).ceil  # Space between column centers
+    row_spacing = (max_outer * 2 + PADDING).ceil  # Space between row tops (diameter + padding)
+    first_col_x = max_outer.ceil  # First column x (enough room for largest arc to the left)
+    first_row_top_y = 1  # First row top-right point y (1" from top edge)
+
+    # Grid: columns (widths) × rows (radii)
     TRACK_WIDTHS.each_with_index do |width, col_idx|
-      col_x = PADDING + col_idx * (max_outer + PADDING) + max_outer
+      col_x = first_col_x + col_idx * col_spacing
 
       RADII.sort.reverse.each_with_index do |radius, row_idx|
         piece = @pieces.find { |p| p[:width] == width && p[:radius] == radius }
-        # Center Y for each row - arc extends outer_r above and below center
-        center_y = PADDING + 0.5 + max_outer + row_idx * (arc_height + PADDING)
+        # Position by top-right point: top_y is grid-aligned, center_y = top_y + outer_r
+        top_y = first_row_top_y + row_idx * row_spacing
+        center_y = top_y + piece[:outer_r]
 
         piece[:x] = col_x
         piece[:y] = center_y
@@ -63,18 +76,22 @@ class TestPieceGenerator
         @layout << piece
       end
 
-      @column_positions << { x: col_x, y: PADDING + 0.2, width: width }
+      @column_positions << { x: col_x, y: 0.2, width: width }
     end
 
-    # Calculate total bounds
-    @total_width = PADDING + TRACK_WIDTHS.size * (max_outer + PADDING) + 1.3
-    @total_height = PADDING + 0.5 + RADII.size * (arc_height + PADDING) + 1.0
+    # Calculate total bounds - add margin for calibration square
+    last_col_x = first_col_x + (TRACK_WIDTHS.size - 1) * col_spacing
+    last_row_top_y = first_row_top_y + (RADII.size - 1) * row_spacing
+    # Last row bottom = last_row_top_y + 2 * max_outer (full diameter of largest arc)
+    @total_width = last_col_x + 2  # Room for calibration square
+    @total_height = (last_row_top_y + max_outer * 2).ceil + 2  # Room for arc + margin
   end
 
   def generate_svg
     svg = []
     svg << svg_header
     svg << svg_styles
+    svg << generate_grid
 
     # Generate each test piece
     @layout.each do |piece|
@@ -116,6 +133,20 @@ class TestPieceGenerator
   .calibration-label { font-family: Arial, sans-serif; font-size: 0.12px; fill: #000; }
 </style>
 <rect width="100%" height="100%" fill="white" />)
+  end
+
+  def generate_grid
+    return "" unless SHOW_BACKGROUND_GRID
+
+    # Create background grid pattern (1" x 1" subtle grid)
+    # With patternUnits="userSpaceOnUse", grid lines naturally align to whole numbers in user space
+    # ViewBox starts at 0,0 so grid aligns with top-left edge
+    %(<defs>
+<pattern id="background-grid" width="#{GRID_SIZE_IN}" height="#{GRID_SIZE_IN}" patternUnits="userSpaceOnUse">
+<path d="M #{GRID_SIZE_IN} 0 L 0 0 0 #{GRID_SIZE_IN}" fill="none" stroke="#{GRID_COLOR}" stroke-width="#{GRID_LINE_WIDTH_IN}"/>
+</pattern>
+</defs>
+<rect x="0" y="0" width="#{@total_width}" height="#{@total_height}" fill="url(#background-grid)"/>)
   end
 
   def generate_arc_channel(piece)
@@ -162,7 +193,7 @@ class TestPieceGenerator
 
     # Two lines: radius and width
     <<~SVG
-      <text x="#{fmt(label_x)}" y="#{fmt(label_y - font_size * 0.3)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">R#{piece[:radius]}"</text>
+      <text x="#{fmt(label_x)}" y="#{fmt(label_y - font_size * 0.3)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">CR#{piece[:radius]}"</text>
       <text x="#{fmt(label_x)}" y="#{fmt(label_y + font_size * 0.9)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">W#{piece[:width]}"</text>
     SVG
   end
@@ -172,11 +203,11 @@ class TestPieceGenerator
   end
 
   def generate_calibration_square
-    # 1" × 1" solid calibration square in bottom-right corner
-    square_x = @total_width - 1.5
-    square_y = @total_height - 1.5
+    # 1" × 1" solid calibration square aligned to grid in bottom-right corner
+    square_x = @total_width - 2  # Aligned to whole inch
+    square_y = @total_height - 2  # Aligned to whole inch
 
-    %(<rect x="#{fmt(square_x)}" y="#{fmt(square_y)}" width="1" height="1" class="channel" />)
+    %(<rect x="#{square_x}" y="#{square_y}" width="1" height="1" class="channel" />)
   end
 
   def fmt(num)
