@@ -1,21 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="9in"
-     height="16in"
-     viewBox="0 0 9 16">
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="1536" viewBox="0 0 9 16">
 <style>
   .channel { fill: #333333; stroke: none; }
-  .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; }
 </style>
-<rect width="100%" height="100%" fill="white" />
-<defs>
-<pattern id="background-grid" width="1.0" height="1.0" patternUnits="userSpaceOnUse">
-<path d="M 1.0 0 L 0 0 0 1.0" fill="none" stroke="#CCCCCC" stroke-width="0.02"/>
-</pattern>
-</defs>
-<rect x="0" y="0" width="9" height="16" fill="url(#background-grid)"/>
 <path d="M 7.0000 13.0500 A 6.0250 6.0250 0 1 1 7.0000 1.0000 L 7.0000 3.0500 A 3.9750 3.9750 0 1 0 7.0000 11.0000 Z" class="channel" />
-<text x="5.0125" y="6.8104" style="font-family: Arial, sans-serif; font-size: 0.7155px; fill: #333; font-weight: bold;" text-anchor="middle">CR5.0"</text>
-<text x="5.0125" y="7.6690" style="font-family: Arial, sans-serif; font-size: 0.7155px; fill: #333; font-weight: bold;" text-anchor="middle">W2.05"</text>
+<g id="labels">
+<circle cx="1.9062" cy="6.0500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.0938" cy="6.0500" r="0.0750" fill="#AAAAAA"/>
+<rect x="1.7750" y="6.2250" width="0.4500" height="0.1500" fill="#AAAAAA"/>
+<circle cx="1.6250" cy="6.5500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.8125" cy="6.5500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.0000" cy="6.5500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.1875" cy="6.5500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.3750" cy="6.5500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.6250" cy="7.2500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.8125" cy="7.2500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.0000" cy="7.2500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.1875" cy="7.2500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="2.3750" cy="7.2500" r="0.0750" fill="#AAAAAA"/>
+<rect x="1.7750" y="7.4250" width="0.4500" height="0.1500" fill="#AAAAAA"/>
+</g>
 <rect x="7" y="14" width="1" height="1" class="channel" />
 </svg>

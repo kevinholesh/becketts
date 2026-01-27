@@ -241,31 +241,22 @@ class TestPieceGenerator
     svg_width = cx + 2  # Room for calibration square on right
     svg_height = (cy + outer_r).ceil + 2  # Room for arc bottom + margin
 
+    # Use 96 DPI (CSS standard) for pixel dimensions so CNC programs interpret size correctly
+    # 1 inch = 96 pixels, viewBox stays in inches for coordinate system
+    dpi = 96
+    pixel_width = svg_width * dpi
+    pixel_height = svg_height * dpi
+
     svg = []
     svg << %(<?xml version="1.0" encoding="UTF-8"?>)
-    svg << %(<svg xmlns="http://www.w3.org/2000/svg")
-    svg << %(     width="#{svg_width}in")
-    svg << %(     height="#{svg_height}in")
-    svg << %(     viewBox="0 0 #{svg_width} #{svg_height}">)
+    svg << %(<svg xmlns="http://www.w3.org/2000/svg" width="#{pixel_width}" height="#{pixel_height}" viewBox="0 0 #{svg_width} #{svg_height}">)
 
-    # Styles
+    # Styles (minimal - shapes use inline fill)
     svg << %(<style>)
     svg << %(  .channel { fill: #333333; stroke: none; })
-    svg << %(  .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; })
     svg << %(</style>)
 
-    # White background
-    svg << %(<rect width="100%" height="100%" fill="white" />)
-
-    # Grid
-    if SHOW_BACKGROUND_GRID
-      svg << %(<defs>)
-      svg << %(<pattern id="background-grid" width="#{GRID_SIZE_IN}" height="#{GRID_SIZE_IN}" patternUnits="userSpaceOnUse">)
-      svg << %(<path d="M #{GRID_SIZE_IN} 0 L 0 0 0 #{GRID_SIZE_IN}" fill="none" stroke="#{GRID_COLOR}" stroke-width="#{GRID_LINE_WIDTH_IN}"/>)
-      svg << %(</pattern>)
-      svg << %(</defs>)
-      svg << %(<rect x="0" y="0" width="#{svg_width}" height="#{svg_height}" fill="url(#background-grid)"/>)
-    end
+    # No background or grid for CNC import - just the shapes
 
     # Arc channel
     start_angle = 90 * Math::PI / 180
@@ -291,13 +282,15 @@ class TestPieceGenerator
 
     svg << %(<path d="#{path}" class="channel" />)
 
-    # Labels inside the arc
-    label_x = cx - inner_r * 0.5
+    # Dot matrix labels on top of the arc channel (for deeper cutting)
+    # Position at the left side of the arc (180° position), centered in the channel width
+    arc_center_radius = (inner_r + outer_r) / 2  # Middle of the channel
+    label_x = cx - arc_center_radius  # Left side of arc (180° position)
     label_y = cy
-    font_size = inner_r * 0.18
 
-    svg << %(<text x="#{fmt(label_x)}" y="#{fmt(label_y - font_size * 0.3)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">CR#{piece[:radius]}"</text>)
-    svg << %(<text x="#{fmt(label_x)}" y="#{fmt(label_y + font_size * 0.9)}" style="font-family: Arial, sans-serif; font-size: #{fmt(font_size)}px; fill: #333; font-weight: bold;" text-anchor="middle">W#{piece[:width]}"</text>)
+    svg << %(<g id="labels">)
+    svg << generate_dot_matrix_label(piece[:width], piece[:radius], label_x, label_y)
+    svg << %(</g>)
 
     # Calibration square (1" × 1") aligned to grid
     cal_x = svg_width - 2
@@ -310,6 +303,78 @@ class TestPieceGenerator
 
   def fmt(num)
     format('%.4f', num)
+  end
+
+  # Dot matrix display for numbers
+  # Each digit is represented as rows of dots
+  # Dot size is exactly 1/8" (0.125")
+  DOT_SIZE = 0.15
+  DOT_SPACING = 0.1875  # Center-to-center spacing (dot + small gap)
+  ROW_SPACING = 0.25    # Vertical spacing between digit rows
+  DIGIT_SPACING = 0.7   # Vertical spacing between width and radius sections
+
+  # Generate dot matrix label showing width (top) and radius (bottom)
+  # Format: width digits stacked vertically, then gap, then radius digits
+  def generate_dot_matrix_label(width, radius, center_x, center_y)
+    dots = []
+
+    # Parse width digits (e.g., 1.75 -> [1, 7, 5])
+    width_digits = width.to_s.gsub('.', '').chars.map(&:to_i)
+    # Parse radius digits (e.g., 4.5 -> [4, 5])
+    radius_digits = radius.to_s.gsub('.', '').chars.map(&:to_i)
+
+    # Calculate total height to center vertically
+    width_rows = width_digits.length
+    radius_rows = radius_digits.length
+    total_height = (width_rows * ROW_SPACING) + DIGIT_SPACING + (radius_rows * ROW_SPACING)
+
+    # Start position (top of the dot matrix)
+    start_y = center_y - total_height / 2
+
+    # Width section (top)
+    current_y = start_y
+    width_digits.each do |digit|
+      dots << generate_dot_row(digit, center_x, current_y)
+      current_y += ROW_SPACING
+    end
+
+    # Gap between width and radius
+    current_y += DIGIT_SPACING - ROW_SPACING
+
+    # Radius section (bottom)
+    radius_digits.each do |digit|
+      dots << generate_dot_row(digit, center_x, current_y)
+      current_y += ROW_SPACING
+    end
+
+    dots.join("\n")
+  end
+
+  # Generate a row of N dots centered at (center_x, y)
+  # For 0, generate a single horizontal line instead
+  def generate_dot_row(count, center_x, y)
+    if count == 0
+      # Single horizontal line for "0"
+      line_width = DOT_SIZE * 3
+      line_height = DOT_SIZE
+      x = center_x - line_width / 2
+      y_pos = y - line_height / 2
+      return %(<rect x="#{fmt(x)}" y="#{fmt(y_pos)}" width="#{fmt(line_width)}" height="#{fmt(line_height)}" fill="#AAAAAA"/>)
+    end
+
+    dots = []
+    # Calculate starting x to center the row
+    total_width = (count - 1) * DOT_SPACING
+    start_x = center_x - total_width / 2
+
+    count.times do |i|
+      x = start_x + i * DOT_SPACING
+      # Circle as a path for CNC compatibility
+      r = DOT_SIZE / 2
+      dots << %(<circle cx="#{fmt(x)}" cy="#{fmt(y)}" r="#{fmt(r)}" fill="#AAAAAA"/>)
+    end
+
+    dots.join("\n")
   end
 end
 

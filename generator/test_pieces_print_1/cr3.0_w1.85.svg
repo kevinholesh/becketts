@@ -1,21 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="6in"
-     height="11in"
-     viewBox="0 0 6 11">
+<svg xmlns="http://www.w3.org/2000/svg" width="576" height="1056" viewBox="0 0 6 11">
 <style>
   .channel { fill: #333333; stroke: none; }
-  .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; }
 </style>
-<rect width="100%" height="100%" fill="white" />
-<defs>
-<pattern id="background-grid" width="1.0" height="1.0" patternUnits="userSpaceOnUse">
-<path d="M 1.0 0 L 0 0 0 1.0" fill="none" stroke="#CCCCCC" stroke-width="0.02"/>
-</pattern>
-</defs>
-<rect x="0" y="0" width="6" height="11" fill="url(#background-grid)"/>
 <path d="M 4.0000 8.8500 A 3.9250 3.9250 0 1 1 4.0000 1.0000 L 4.0000 2.8500 A 2.0750 2.0750 0 1 0 4.0000 7.0000 Z" class="channel" />
-<text x="2.9625" y="4.8130" style="font-family: Arial, sans-serif; font-size: 0.3735px; fill: #333; font-weight: bold;" text-anchor="middle">CR3.0"</text>
-<text x="2.9625" y="5.2612" style="font-family: Arial, sans-serif; font-size: 0.3735px; fill: #333; font-weight: bold;" text-anchor="middle">W1.85"</text>
+<g id="labels">
+<circle cx="1.0000" cy="3.9500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.3438" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.5312" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.7188" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.9062" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.0938" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.2812" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.4688" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.6562" cy="4.2000" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.6250" cy="4.4500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.8125" cy="4.4500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.0000" cy="4.4500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.1875" cy="4.4500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.3750" cy="4.4500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="0.8125" cy="5.1500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.0000" cy="5.1500" r="0.0750" fill="#AAAAAA"/>
+<circle cx="1.1875" cy="5.1500" r="0.0750" fill="#AAAAAA"/>
+<rect x="0.7750" y="5.3250" width="0.4500" height="0.1500" fill="#AAAAAA"/>
+</g>
 <rect x="4" y="9" width="1" height="1" class="channel" />
 </svg>
