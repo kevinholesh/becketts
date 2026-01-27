@@ -93,29 +93,40 @@ STRAIGHTEN_THRESHOLD = 0.015      # Max average curvature to simplify to a strai
 
 # Piece geometry overrides
 # For pieces that need custom geometry (like smoothing a tight chicane), specify the
-# piece number and the override method to call. The method receives start/end points
-# and returns an array of points for the new path.
+# piece number and the override parameters.
+#
+# CHAINING: By default, each piece starts where the previous piece ended (automatic chaining).
+# This means custom geometry in one piece affects all subsequent pieces.
+#
+# Options:
+#   segments: Array of turns/straights that define the piece geometry
+#     - { type: :turn, radius: X, angle: Y, direction: :left/:right }
+#     - { type: :straight, distance: X }
+#   no_connector: true - Don't add smooth connector to red track exit; piece ends where segments end
+#   length: X - Generate a straight of X inches (instead of using segments)
+#   direction_adjust: X - Rotate direction by X degrees before generating (positive = left/CCW)
+#   anchor_to_original: true - Don't chain; use original red track position for entry
 #
 # NOTE: All radius values are CENTERLINE radii (distance from arc center to track centerline).
 # Use centerline_radius_from_inner_edge_radius(inner_edge) to convert from inner edge radius.
-# Example: centerline_radius_from_inner_edge_radius(2.5) = 3.375" (2.5" inner edge + 0.875" half-width)
 PIECE_OVERRIDES = {
-  2 => {  # Adjust last turn to avoid piece 3/8 collision
-    segments: [
-      { type: :turn, radius: 7.0, angle: 50, direction: :right },
-    ],
-  },
-  3 => {  # Chicane with three turns
-    segments: [
-      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 110, direction: :right },
-      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 140, direction: :left },
-      { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 60, direction: :left },
-    ],
-  },
-  4 => {  # Shortened straight
-    segments: [],
-    entry_offset: 4.0,  # inches to shorten at racing entry (affects blue line, propagates to next pieces)
-  },
+  # 2 => {  # Adjust last turn to avoid piece 3/8 collision
+  #   # segments: [
+  #   #   { type: :turn, radius: 7.0, angle: 50, direction: :right },
+  #   # ],
+  # },
+  # 3 => {  # Chicane with three turns - ends where segments end, not on red track
+  #   segments: [
+  #     { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 110, direction: :right },
+  #     { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 140, direction: :left },
+  #     { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 60, direction: :left },
+  #   ],
+  #   no_connector: true,  # End where segments end, don't force to red track
+  # },
+  # 4 => {  # Straight piece - adjust length and direction as needed
+  #   length: 8.0,  # 4 inch straight
+  #   # direction_adjust: 10,  # Uncomment to rotate 10° left
+  # },
   12 => {
     segments: [
       { type: :turn, radius: centerline_radius_from_inner_edge_radius(2.5), angle: 80, direction: :left },
@@ -176,12 +187,12 @@ GHOST_TRACK_STYLE = 'solid'       # 'solid' or 'dashed'
 SHOW_EDIT_PATH = true             # Enable blue edit path overlay
 EDIT_PATH_COLOR = '#0066FF'       # Blue for edit path
 EDIT_PATH_WIDTH_IN = 0.5         # Thicker line for visibility
-EDIT_PATH_OPACITY = 0.3          # Full opacity for editing
+EDIT_PATH_OPACITY = 0.8          # Higher opacity for editing focus
 
 # Rendering toggles - disable to focus on path editing
-SHOW_SIDEWALLS = true            # Render the U-shaped track profile
+SHOW_SIDEWALLS = false           # Render the U-shaped track profile
 SHOW_TEST_CARS = false            # Render test car visualizations
-SHOW_WOOD_GRAIN = true           # Render grain direction lines
+SHOW_WOOD_GRAIN = false          # Render grain direction lines
 
 # Tight radius warning visualization
 SHOW_TIGHT_RADIUS_WARNINGS = false # Highlight curves that are too tight for cars
@@ -1477,29 +1488,80 @@ class SplitVisualizer
   end
 
   # Phase 3: Generate geometry for each piece using updated endpoints
+  # Processes in racing order, automatically chaining from previous piece's actual exit
   def generate_piece_geometries(analyzer, piece_chain)
     @overridden_pieces = []
+    num_pieces = piece_chain.length
 
-    piece_chain.each do |piece|
+    piece_chain.each_with_index do |piece, idx|
       piece_num = piece[:piece_num]
+      override = PIECE_OVERRIDES[piece_num] || {}
 
-      if PIECE_OVERRIDES.key?(piece_num)
-        override = PIECE_OVERRIDES[piece_num]
-        segments = override[:segments] || []
+      # Always chain from previous piece's actual exit (unless anchor_to_original is set)
+      unless override[:anchor_to_original]
+        prev_idx = (idx - 1 + num_pieces) % num_pieces
+        prev_piece = piece_chain[prev_idx]
 
+        if prev_piece[:actual_exit_pt] && prev_piece[:actual_exit_dir]
+          piece[:racing_entry_pt] = prev_piece[:actual_exit_pt].dup
+          piece[:racing_entry_dir] = prev_piece[:actual_exit_dir].dup
+        end
+      end
+
+      segments = override[:segments] || []
+      no_connector = override[:no_connector] || false
+
+      # Handle explicit length for straights (with optional direction adjustment)
+      if override[:length] && override[:length] > 0
+        entry_dir = piece[:racing_entry_dir].dup
+
+        # Apply direction adjustment if specified (in degrees, positive = left/CCW)
+        if override[:direction_adjust]
+          angle_rad = override[:direction_adjust] * Math::PI / 180.0
+          cos_a = Math.cos(angle_rad)
+          sin_a = Math.sin(angle_rad)
+          # Rotate direction vector (CCW rotation in standard coords, but SVG Y is flipped)
+          entry_dir = [
+            entry_dir[0] * cos_a + entry_dir[1] * sin_a,
+            -entry_dir[0] * sin_a + entry_dir[1] * cos_a
+          ]
+        end
+
+        # Create a straight of the specified length
+        straight_pts = PieceOverrideGenerator.build_straight_run(
+          piece[:racing_entry_pt],
+          entry_dir,
+          override[:length],
+          10
+        )
+        piece[:generated_pts] = straight_pts
+        piece[:actual_exit_pt] = straight_pts.last.dup
+        piece[:actual_exit_dir] = entry_dir.dup  # Straight doesn't change direction
+
+        puts "  Piece #{piece_num}: generated #{override[:length]}\" straight" +
+             (override[:direction_adjust] ? " (direction adjusted #{override[:direction_adjust]}°)" : "")
+        @overridden_pieces << [piece_num, piece[:original_pts].length, piece[:generated_pts].length]
+      elsif segments.any?
         # Build piece from racing entry to racing exit using segments
-        piece[:generated_pts] = build_override_piece_racing_order(
+        result = build_override_piece_racing_order(
           piece[:racing_entry_pt],
           piece[:racing_exit_pt],
           piece[:racing_entry_dir],
           piece[:racing_exit_dir],
-          segments
+          segments,
+          no_connector: no_connector
         )
+
+        piece[:generated_pts] = result[:points]
+        piece[:actual_exit_pt] = result[:actual_exit_pt]
+        piece[:actual_exit_dir] = result[:actual_exit_dir]
 
         @overridden_pieces << [piece_num, piece[:original_pts].length, piece[:generated_pts].length]
       elsif is_piece_nearly_straight?(piece[:original_pts])
         # Straighten to just entry and exit
         piece[:generated_pts] = [piece[:racing_entry_pt], piece[:racing_exit_pt]]
+        piece[:actual_exit_pt] = piece[:generated_pts].last.dup
+        piece[:actual_exit_dir] = piece[:racing_exit_dir].dup
       else
         # Use original geometry but with updated endpoints
         piece[:generated_pts] = interpolate_piece_with_endpoints(
@@ -1507,12 +1569,15 @@ class SplitVisualizer
           piece[:racing_entry_pt],
           piece[:racing_exit_pt]
         )
+        piece[:actual_exit_pt] = piece[:generated_pts].last.dup
+        piece[:actual_exit_dir] = piece[:racing_exit_dir].dup
       end
     end
   end
 
   # Build override piece geometry in racing order (entry to exit)
-  def build_override_piece_racing_order(entry_pt, exit_pt, entry_dir, exit_dir, segments)
+  # Returns: { points: [...], actual_exit_pt: [...], actual_exit_dir: [...] }
+  def build_override_piece_racing_order(entry_pt, exit_pt, entry_dir, exit_dir, segments, no_connector: false)
     all_points = [entry_pt.dup]
     current_pt = entry_pt.dup
     current_dir = entry_dir.dup
@@ -1535,11 +1600,21 @@ class SplitVisualizer
       end
     end
 
-    # Smooth connector to exit point
-    connector_pts = PieceOverrideGenerator.build_smooth_connector(current_pt, current_dir, exit_pt, exit_dir, 30)
-    all_points += connector_pts[1..-1]
+    # Track actual exit before any connector
+    actual_exit_pt = current_pt.dup
+    actual_exit_dir = current_dir.dup
 
-    all_points
+    unless no_connector
+      # Smooth connector to exit point
+      connector_pts = PieceOverrideGenerator.build_smooth_connector(current_pt, current_dir, exit_pt, exit_dir, 30)
+      all_points += connector_pts[1..-1]
+    end
+
+    {
+      points: all_points,
+      actual_exit_pt: actual_exit_pt,
+      actual_exit_dir: actual_exit_dir
+    }
   end
 
   # Check if piece points are nearly straight
