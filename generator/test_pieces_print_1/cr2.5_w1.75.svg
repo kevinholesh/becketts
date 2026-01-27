@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="6in"
+     height="10in"
+     viewBox="0 0 6 10">
+<style>
+  .channel { fill: #333333; stroke: none; }
+  .label { font-family: Arial, sans-serif; font-size: 0.18px; fill: #333; }
+</style>
+<rect width="100%" height="100%" fill="white" />
+<defs>
+<pattern id="background-grid" width="1.0" height="1.0" patternUnits="userSpaceOnUse">
+<path d="M 1.0 0 L 0 0 0 1.0" fill="none" stroke="#CCCCCC" stroke-width="0.02"/>
+</pattern>
+</defs>
+<rect x="0" y="0" width="6" height="10" fill="url(#background-grid)"/>
+<path d="M 4.0000 7.7500 A 3.3750 3.3750 0 1 1 4.0000 1.0000 L 4.0000 2.7500 A 1.6250 1.6250 0 1 0 4.0000 6.0000 Z" class="channel" />
+<text x="3.1875" y="4.2872" style="font-family: Arial, sans-serif; font-size: 0.2925px; fill: #333; font-weight: bold;" text-anchor="middle">CR2.5"</text>
+<text x="3.1875" y="4.6382" style="font-family: Arial, sans-serif; font-size: 0.2925px; fill: #333; font-weight: bold;" text-anchor="middle">W1.75"</text>
+<rect x="4" y="8" width="1" height="1" class="channel" />
+</svg>
