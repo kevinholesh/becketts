@@ -78,9 +78,9 @@ SOLO_BOARD_PIECES = [2]           # Pieces that get their own dedicated board (n
 # Pieces are placed with their top-left at (0,0). After rotation, they're repositioned.
 # Use positive x to move right, positive y to move down.
 NESTING_PAIRS = {
-  [10, 7] => { p1_y: 4.0, p2_rotate: 180, p2_x: 1.3, p2_y: 0.0 },
+  [6, 1]  => { p2_rotate: 180, p2_x: 2.6, p2_y: 4.0 },
   [9, 4]  => { p2_rotate: 180, p2_x: 2.4, p2_y: 4.0 },
-  [6, 1]  => { p2_rotate: 180, p2_x: 2.4, p2_y: 4.0 },
+  [10, 7] => { p1_y: 4.0, p2_rotate: 180, p2_x: 1.4, p2_y: 0.0 },
 }
 
 #===============================================================================
