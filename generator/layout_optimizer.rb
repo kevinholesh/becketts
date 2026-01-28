@@ -28,18 +28,19 @@ require_relative 'track_generator'
 # 0° = grain runs vertically (along piece length)
 GRAIN_OVERRIDES = {
   # Straight pieces - grain along length
-  1 => 0,      # 100% straight
-  4 => 0,      # 100% straight
-  9 => 0,      # 100% straight
-  7 => 0,      # 99% straight
-  6 => 0,      # 97% straight
-  2 => 0,      # 94% straight
-  10 => 0,     # 92% straight
-  8 => 0,      # 88% straight
-  # Curved pieces
-  11 => 0,     # 57% straight
-  3 => 0,      # 48% straight
-  5 => 0,      # 31% straight
+  1 => 0,
+  4 => 0,
+  9 => 2.2,
+  7 => -5.1,
+  6 => 2.5,
+  2 => 0,
+  10 => -8,
+  8 => 0,
+
+  # Chicane pieces
+  11 => 90,
+  3 => 90,
+  5 => 113,
 }
 
 # Grain angle tolerance - pieces can rotate within this for better nesting
@@ -57,16 +58,84 @@ PIECE_MARGIN = 0.25   # Margin around pieces on each board
 PIECE_SPACING = PIECE_MARGIN  # Gap between pieces
 BOARD_MARGIN = 0.3    # Margin from SVG edges for display
 
+# CNC parameters
+CHANNEL_EXTENSION = 0.125  # How far inner channel extends past piece ends (1/8") for clean CNC cuts
+
 # Piece categorization
 SOLO_PANEL_PIECES = [5, 11, 3]  # Curvy pieces that get individual glue-up panels
-FORCE_SINGLE_BOARD = [8]        # Wide pieces that can still fit on single boards
+FORCE_SINGLE_BOARD = [8]          # Wide pieces that can still fit on single boards
+SOLO_BOARD_PIECES = [2]           # Pieces that get their own dedicated board (no sharing)
+
+# Special nesting configurations for specific piece pairs
+# Manual control over positioning:
+#   :p1_rotate  - rotation of first piece in degrees (default 0)
+#   :p1_x       - x offset of first piece (default 0)
+#   :p1_y       - y offset of first piece (default 0)
+#   :p2_rotate  - rotation of second piece in degrees (default 0, use 180 for sixty-nine)
+#   :p2_x       - x position of second piece relative to group origin
+#   :p2_y       - y position of second piece relative to group origin
+#
+# Pieces are placed with their top-left at (0,0). After rotation, they're repositioned.
+# Use positive x to move right, positive y to move down.
+NESTING_PAIRS = {
+  [10, 7] => { p1_y: 4.0, p2_rotate: 180, p2_x: 1.3, p2_y: 0.0 },
+  [9, 4]  => { p2_rotate: 180, p2_x: 2.4, p2_y: 4.0 },
+  [6, 1]  => { p2_rotate: 180, p2_x: 2.4, p2_y: 4.0 },
+}
+
+#===============================================================================
+# HELPER FUNCTIONS
+#===============================================================================
+
+# Convert decimal inches to fractional string (to nearest 1/16")
+def inches_to_fraction(value)
+  whole = value.floor
+  decimal = value - whole
+
+  # Round to nearest 1/16
+  sixteenths = (decimal * 16).round
+
+  return whole.to_s if sixteenths == 0
+  return (whole + 1).to_s if sixteenths == 16
+
+  # Simplify the fraction
+  numerator = sixteenths
+  denominator = 16
+
+  # Find GCD to reduce fraction
+  gcd = numerator.gcd(denominator)
+  numerator /= gcd
+  denominator /= gcd
+
+  if whole == 0
+    "#{numerator}/#{denominator}"
+  else
+    "#{whole}-#{numerator}/#{denominator}"
+  end
+end
+
+# Calculate polygon area using the shoelace formula
+def polygon_area(points)
+  return 0 if points.nil? || points.length < 3
+
+  n = points.length
+  area = 0.0
+
+  n.times do |i|
+    j = (i + 1) % n
+    area += points[i][0] * points[j][1]
+    area -= points[j][0] * points[i][1]
+  end
+
+  (area.abs / 2.0)
+end
 
 #===============================================================================
 # PIECE DATA STRUCTURE
 #===============================================================================
 
 class PieceData
-  attr_reader :piece_num, :width, :height, :points, :inner_channel, :left_wall, :right_wall
+  attr_reader :piece_num, :width, :height, :points, :inner_channel, :outer_boundary, :left_wall, :right_wall
   attr_reader :grain_angle, :rotated_width, :rotated_height
   attr_accessor :x, :y, :rotation, :board_offset, :x_in_group, :rotated_180, :grain_offset
 
@@ -104,6 +173,7 @@ class PieceData
     return unless shapes
 
     @inner_channel = shapes[:inner_channel]
+    @outer_boundary = shapes[:outer_boundary]
     @left_wall = shapes[:left_wall]
     @right_wall = shapes[:right_wall]
 
@@ -119,6 +189,7 @@ class PieceData
 
     # Normalize to origin
     @inner_channel = @inner_channel.map { |p| [p[0] - min_x, p[1] - min_y] }
+    @outer_boundary = @outer_boundary.map { |p| [p[0] - min_x, p[1] - min_y] }
     @left_wall = @left_wall.map { |p| [p[0] - min_x, p[1] - min_y] }
     @right_wall = @right_wall.map { |p| [p[0] - min_x, p[1] - min_y] }
 
@@ -179,8 +250,63 @@ class PieceData
 
     return nil if outer_left.length < 2
 
+    # Add tongue extensions to inner channel for clean CNC cuts
+    # Extend the channel past the start and end faces
+    if CHANNEL_EXTENSION > 0 && points.length >= 2
+      # Start tongue: extend backwards from first point
+      start_pt = points[0]
+      next_pt = points[1]
+      start_dx = next_pt[0] - start_pt[0]
+      start_dy = next_pt[1] - start_pt[1]
+      start_len = Math.sqrt(start_dx * start_dx + start_dy * start_dy)
+      if start_len > 0.001
+        # Direction unit vector (pointing forward along track)
+        dir_x = start_dx / start_len
+        dir_y = start_dy / start_len
+        # Normal vector (perpendicular)
+        norm_x = -start_dy / start_len
+        norm_y = start_dx / start_len
+
+        # Extend backwards by CHANNEL_EXTENSION
+        ext_x = start_pt[0] - dir_x * CHANNEL_EXTENSION
+        ext_y = start_pt[1] - dir_y * CHANNEL_EXTENSION
+
+        # Add tongue points at the start
+        tongue_start_left = [ext_x + norm_x * half_inner, ext_y + norm_y * half_inner]
+        tongue_start_right = [ext_x - norm_x * half_inner, ext_y - norm_y * half_inner]
+        inner_left.unshift(tongue_start_left)
+        inner_right.unshift(tongue_start_right)
+      end
+
+      # End tongue: extend forward from last point
+      end_pt = points[-1]
+      prev_pt = points[-2]
+      end_dx = end_pt[0] - prev_pt[0]
+      end_dy = end_pt[1] - prev_pt[1]
+      end_len = Math.sqrt(end_dx * end_dx + end_dy * end_dy)
+      if end_len > 0.001
+        # Direction unit vector (pointing forward along track)
+        dir_x = end_dx / end_len
+        dir_y = end_dy / end_len
+        # Normal vector (perpendicular)
+        norm_x = -end_dy / end_len
+        norm_y = end_dx / end_len
+
+        # Extend forward by CHANNEL_EXTENSION
+        ext_x = end_pt[0] + dir_x * CHANNEL_EXTENSION
+        ext_y = end_pt[1] + dir_y * CHANNEL_EXTENSION
+
+        # Add tongue points at the end
+        tongue_end_left = [ext_x + norm_x * half_inner, ext_y + norm_y * half_inner]
+        tongue_end_right = [ext_x - norm_x * half_inner, ext_y - norm_y * half_inner]
+        inner_left.push(tongue_end_left)
+        inner_right.push(tongue_end_right)
+      end
+    end
+
     {
       inner_channel: inner_left + inner_right.reverse,
+      outer_boundary: outer_left + outer_right.reverse,
       left_wall: outer_left + inner_left.reverse,
       right_wall: outer_right + inner_right.reverse
     }
@@ -719,56 +845,88 @@ class MultiboardSVGGenerator
     @margin = margin
   end
 
-  def generate
-    svg = <<~SVG
-      <?xml version="1.0" encoding="UTF-8"?>
-      <svg xmlns="http://www.w3.org/2000/svg"
-           width="#{@svg_width}in"
-           height="#{@svg_height.ceil}in"
-           viewBox="0 0 #{@svg_width} #{@svg_height.ceil}">
-      <style>
-        .inner-channel { fill: #AAAAAA; stroke: none; }
-        .sidewall { fill: #333333; stroke: none; }
-        .label { font-family: Arial, sans-serif; font-weight: bold; fill: #333; }
-        .board-label { font-family: Arial, sans-serif; font-size: 0.35px; fill: #666; }
-        .grain-arrow { stroke: #8B4513; stroke-width: 0.04; fill: none; }
-        .note { font-family: Arial, sans-serif; font-size: 0.2px; fill: #666; }
-        .board { fill: #DEB887; stroke: #8B4513; stroke-width: 0.03; }
-        .glueup { fill: #D2B48C; stroke: #8B4513; stroke-width: 0.03; stroke-dasharray: 0.1,0.05; }
-        .piece-bbox { fill: none; stroke: #0066FF; stroke-width: 0.01; opacity: 0.3; }
-      </style>
+  def generate(cnc_friendly: false)
+    # Round dimensions for cleaner output
+    width = @svg_width.round(3)
+    height = @svg_height.round(3)
 
-      <!-- Background -->
-      <rect width="100%" height="100%" fill="#F5F5DC" />
+    # Calibration square position (bottom-left, grid-aligned)
+    cal_y = (height - 1).floor
 
-      <!-- Grid -->
-      <defs>
-        <pattern id="grid" width="1" height="1" patternUnits="userSpaceOnUse">
-          <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#DDD" stroke-width="0.015"/>
-        </pattern>
-        <pattern id="grain-lines" width="0.3" height="0.3" patternUnits="userSpaceOnUse">
-          <line x1="0" y1="0" x2="0" y2="0.3" stroke="#A0522D" stroke-width="0.01" opacity="0.2"/>
-        </pattern>
-        <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="0.4" markerHeight="0.4" orient="auto">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B4513"/>
-        </marker>
-      </defs>
-      <rect x="0" y="0" width="#{@svg_width}" height="#{@svg_height.ceil}" fill="url(#grid)"/>
-    SVG
+    if cnc_friendly
+      # CNC-friendly version: no backgrounds, just pieces and calibration square
+      svg = <<~SVG
+        <?xml version="1.0" encoding="UTF-8"?>
+        <svg xmlns="http://www.w3.org/2000/svg"
+             width="#{width}in"
+             height="#{height}in"
+             viewBox="0 0 #{width} #{height}">
+        <style>
+          .outer-boundary { fill: #333333; stroke: none; }
+          .inner-channel { fill: #AAAAAA; stroke: none; }
+        </style>
 
-    # Draw each board
+        <!-- 1" x 1" Calibration Square (bottom-left, grid-aligned) -->
+        <rect x="0" y="#{cal_y}" width="1" height="1" fill="#000000"/>
+      SVG
+    else
+      # Full version with backgrounds, grid, labels
+      svg = <<~SVG
+        <?xml version="1.0" encoding="UTF-8"?>
+        <svg xmlns="http://www.w3.org/2000/svg"
+             width="#{width}in"
+             height="#{height}in"
+             viewBox="0 0 #{width} #{height}">
+        <style>
+          .outer-boundary { fill: #333333; stroke: none; }
+          .inner-channel { fill: #AAAAAA; stroke: none; }
+          .label { font-family: Arial, sans-serif; font-weight: bold; fill: #333; }
+          .board-label { font-family: Arial, sans-serif; font-size: 0.35px; fill: #666; }
+          .grain-arrow { stroke: #8B4513; stroke-width: 0.04; fill: none; }
+          .note { font-family: Arial, sans-serif; font-size: 0.2px; fill: #666; }
+          .board { fill: #DEB887; stroke: #8B4513; stroke-width: 0.03; }
+          .glueup { fill: #D2B48C; stroke: #8B4513; stroke-width: 0.03; stroke-dasharray: 0.1,0.05; }
+          .piece-bbox { fill: none; stroke: #0066FF; stroke-width: 0.01; opacity: 0.3; }
+        </style>
+
+        <!-- Background (explicit dimensions, not 100%) -->
+        <rect x="0" y="0" width="#{width}" height="#{height}" fill="#F5F5DC" />
+
+        <!-- Grid -->
+        <defs>
+          <pattern id="grid" width="1" height="1" patternUnits="userSpaceOnUse">
+            <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#DDD" stroke-width="0.015"/>
+          </pattern>
+          <pattern id="grain-lines" width="0.3" height="0.3" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="0.3" stroke="#A0522D" stroke-width="0.01" opacity="0.2"/>
+          </pattern>
+          <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="0.4" markerHeight="0.4" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8B4513"/>
+          </marker>
+        </defs>
+        <rect x="0" y="0" width="#{width}" height="#{height}" fill="url(#grid)"/>
+
+        <!-- 1" x 1" Calibration Square (bottom-left, grid-aligned) -->
+        <rect x="0" y="#{cal_y}" width="1" height="1" fill="#000000"/>
+      SVG
+    end
+
+    # Draw each board (skip board backgrounds for CNC-friendly version)
     @board_layouts.each do |board|
-      css_class = board[:type] == :glueup ? 'glueup' : 'board'
-      bx = board[:x] || @margin  # Use board x position for horizontal layout
+      bx = board[:x] || @margin
 
-      # Board background with grain texture
-      svg += %(<rect x="#{bx}" y="#{board[:y]}" width="#{board[:width]}" height="#{board[:length]}" class="#{css_class}" fill="url(#grain-lines)"/>\n)
+      unless cnc_friendly
+        css_class = board[:type] == :glueup ? 'glueup' : 'board'
 
-      # Board outline
-      svg += %(<rect x="#{bx}" y="#{board[:y]}" width="#{board[:width]}" height="#{board[:length]}" class="#{css_class}"/>\n)
+        # Board background with grain texture
+        svg += %(<rect x="#{bx}" y="#{board[:y]}" width="#{board[:width]}" height="#{board[:length]}" class="#{css_class}" fill="url(#grain-lines)"/>\n)
 
-      # Board label (above the board with more padding)
-      svg += %(<text x="#{bx + board[:width] / 2}" y="#{board[:y] - 0.5}" class="board-label" text-anchor="middle">#{board[:label]}</text>\n)
+        # Board outline
+        svg += %(<rect x="#{bx}" y="#{board[:y]}" width="#{board[:width]}" height="#{board[:length]}" class="#{css_class}"/>\n)
+
+        # Board label (above the board with more padding)
+        svg += %(<text x="#{bx + board[:width] / 2}" y="#{board[:y] - 0.5}" class="board-label" text-anchor="middle">#{board[:label]}</text>\n)
+      end
     end
 
     # Draw pieces
@@ -778,45 +936,36 @@ class MultiboardSVGGenerator
       # Apply 180° rotation if needed (flips the piece vertically)
       rotated = piece.rotated_180
 
-      # Inner channel
+      # Group all piece components together
+      piece_id = "piece-#{piece.piece_num}"
+      svg += %(<g id="#{piece_id}">\n)
+
+      # Outer boundary (full piece outline including sidewalls)
+      svg += path_element_rotated(piece.outer_boundary, piece.x, piece.y, piece.width, piece.height, rotated, "outer-boundary")
+
+      # Inner channel (the track groove)
       svg += path_element_rotated(piece.inner_channel, piece.x, piece.y, piece.width, piece.height, rotated, "inner-channel")
 
-      # Sidewalls
-      svg += path_element_rotated(piece.left_wall, piece.x, piece.y, piece.width, piece.height, rotated, "sidewall")
-      svg += path_element_rotated(piece.right_wall, piece.x, piece.y, piece.width, piece.height, rotated, "sidewall")
+      svg += %(</g>\n)
 
-      # Piece label - positioned OUTSIDE the board to the right, with pointer line
-      # Find which board this piece is on
-      piece_board = @board_layouts.find { |b| piece.x >= b[:x] && piece.x < b[:x] + b[:width] + 1 }
-      next unless piece_board
+      # Piece labels (skip for CNC-friendly version)
+      unless cnc_friendly
+        # Find which board this piece is on
+        piece_board = @board_layouts.find { |b| piece.x >= b[:x] && piece.x < b[:x] + b[:width] + 1 }
+        next unless piece_board
 
-      # Label position: to the right of the board
-      label_x = piece_board[:x] + piece_board[:width] + 1.5
-      label_y = piece.y + piece.height / 2  # Vertically centered on piece
+        # Label position: below the board, horizontally centered on piece
+        label_x = piece.x + piece.width / 2
+        label_y = piece_board[:y] + piece_board[:length] + 0.4  # Below the board
 
-      # Pointer line from label to piece
-      line_start_x = label_x - 0.3
-      line_end_x = piece.x + piece.width + 0.1
-      line_y = label_y
-      svg += %(<line x1="#{line_start_x.round(3)}" y1="#{line_y.round(3)}" x2="#{line_end_x.round(3)}" y2="#{line_y.round(3)}" stroke="#666" stroke-width="0.03" stroke-dasharray="0.1,0.05"/>\n)
+        # Piece number (add "ᴿ" suffix if rotated)
+        label_text = piece.piece_num.to_s + (rotated ? "ᴿ" : "")
 
-      # Small dot at the piece end
-      svg += %(<circle cx="#{line_end_x.round(3)}" cy="#{line_y.round(3)}" r="0.08" fill="#666"/>\n)
+        # Grain direction indicator: ↑ for normal, ↓ for rotated
+        grain_indicator = rotated ? "↓" : "↑"
 
-      # Piece number (add "R" suffix if rotated)
-      label_text = piece.piece_num.to_s + (rotated ? "ᴿ" : "")
-      svg += %(<text x="#{label_x.round(3)}" y="#{label_y.round(3)}" class="label" style="font-size: 0.4px;" dominant-baseline="middle">#{label_text}</text>\n)
-
-      # Small grain direction arrow next to number
-      arrow_x = label_x + 0.6
-      if rotated
-        arrow_y1 = label_y + 0.15
-        arrow_y2 = label_y - 0.15
-      else
-        arrow_y1 = label_y - 0.15
-        arrow_y2 = label_y + 0.15
+        svg += %(<text x="#{label_x.round(3)}" y="#{label_y.round(3)}" class="label" style="font-size: 0.4px;" text-anchor="middle" dominant-baseline="middle">#{label_text} #{grain_indicator}</text>\n)
       end
-      svg += %(<line x1="#{arrow_x.round(3)}" y1="#{arrow_y1.round(3)}" x2="#{arrow_x.round(3)}" y2="#{arrow_y2.round(3)}" stroke="#5D3A1A" stroke-width="0.04" marker-end="url(#arrow)"/>\n)
     end
 
     svg += "</svg>\n"
@@ -1013,32 +1162,58 @@ puts ""
 def pack_onto_boards_nested(pieces, board_length, board_width, spacing, margin)
   boards = []
 
-  # Separate straight pieces (can be placed side-by-side) from curved pieces
-  straight_pieces = pieces.select { |p| p.width <= 3.0 }  # Narrow enough to nest
-  other_pieces = pieces.select { |p| p.width > 3.0 }
+  # First, handle special nesting pairs from configuration
+  paired = []
+  used_piece_nums = Set.new
+
+  NESTING_PAIRS.each do |pair_nums, config|
+    p1 = pieces.find { |p| p.piece_num == pair_nums[0] }
+    p2 = pieces.find { |p| p.piece_num == pair_nums[1] }
+
+    next unless p1 && p2
+
+    used_piece_nums << pair_nums[0]
+    used_piece_nums << pair_nums[1]
+
+    paired << {
+      pieces: [p1, p2],
+      type: :manual,
+      config: config
+    }
+  end
+
+  # Separate remaining pieces
+  remaining_pieces = pieces.reject { |p| used_piece_nums.include?(p.piece_num) }
+
+  # Solo board pieces get their own dedicated boards (no sharing)
+  solo_pieces = remaining_pieces.select { |p| SOLO_BOARD_PIECES.include?(p.piece_num) }
+  remaining_pieces = remaining_pieces.reject { |p| SOLO_BOARD_PIECES.include?(p.piece_num) }
+
+  solo_pieces.each do |p|
+    paired << { pieces: [p], type: :solo, config: {} }
+  end
+
+  straight_pieces = remaining_pieces.select { |p| p.width <= 3.0 }
+  other_pieces = remaining_pieces.select { |p| p.width > 3.0 }
 
   # Sort straight pieces by height descending
   straight_pieces.sort_by! { |p| -p.height }
 
-  # Try to pair up straight pieces side-by-side
-  paired = []
+  # Try to pair up straight pieces side-by-side (generic pairing)
   used = Set.new
 
   straight_pieces.each_with_index do |p1, i|
     next if used.include?(i)
 
-    # Find a piece that can pair with this one (similar height, combined width fits)
     best_match = nil
     best_idx = nil
 
     straight_pieces.each_with_index do |p2, j|
       next if i == j || used.include?(j)
 
-      # Check if they can fit side-by-side
       combined_width = p1.width + p2.width + spacing
       next if combined_width > board_width - 2 * margin
 
-      # Prefer pieces with similar heights
       height_diff = (p1.height - p2.height).abs
       if best_match.nil? || height_diff < (p1.height - best_match.height).abs
         best_match = p2
@@ -1047,18 +1222,18 @@ def pack_onto_boards_nested(pieces, board_length, board_width, spacing, margin)
     end
 
     if best_match
-      paired << { pieces: [p1, best_match], type: :side_by_side }
+      paired << { pieces: [p1, best_match], type: :side_by_side, config: {} }
       used << i
       used << best_idx
     else
-      paired << { pieces: [p1], type: :single }
+      paired << { pieces: [p1], type: :single, config: {} }
       used << i
     end
   end
 
   # Add other pieces as singles
   other_pieces.each do |p|
-    paired << { pieces: [p], type: :single }
+    paired << { pieces: [p], type: :single, config: {} }
   end
 
   # Now pack the paired/single groups onto boards
@@ -1066,24 +1241,77 @@ def pack_onto_boards_nested(pieces, board_length, board_width, spacing, margin)
 
   paired.each do |group|
     placed = false
-    group_height = group[:pieces].map(&:height).max
+    config = group[:config] || {}
 
-    # Try to fit on existing board
+    # Calculate group dimensions based on nesting config
+    if group[:type] == :manual && group[:pieces].length == 2
+      # Manual nesting: calculate bounds based on explicit positioning
+      p1, p2 = group[:pieces]
+      p1_x = config[:p1_x] || 0
+      p1_y = config[:p1_y] || 0
+      p2_x = config[:p2_x] || (p1.width + PIECE_SPACING)
+      p2_y = config[:p2_y] || 0
+
+      # Group width is the rightmost extent
+      group_width = [p1_x + p1.width, p2_x + p2.width].max
+      # Group height accounts for y offset
+      group_height = [p1_y + p1.height, p2_y + p2.height].max
+    elsif group[:pieces].length > 1
+      group_width = group[:pieces].sum(&:width) + (group[:pieces].length - 1) * spacing
+      group_height = group[:pieces].map(&:height).max
+    else
+      group_width = group[:pieces].first.width
+      group_height = group[:pieces].first.height
+    end
+
+    # Solo pieces always get their own board
+    if group[:type] == :solo
+      piece = group[:pieces].first
+      piece.board_offset = margin
+      piece.x_in_group = 0
+      piece.rotated_180 = false
+
+      boards << {
+        pieces: group[:pieces].dup,
+        used_length: margin + group_height + spacing,
+        max_width: group_width,
+        locked: true  # Prevent other pieces from being added
+      }
+      next
+    end
+
+    # Try to fit on existing board (skip locked boards)
     boards.each do |board|
+      next if board[:locked]
+
       remaining = board_length - board[:used_length] - margin
       if group_height + spacing <= remaining
-        # Check width fits
-        group_width = group[:pieces].sum(&:width) + (group[:pieces].length - 1) * spacing
         board_used_width = board[:max_width] || 0
 
-        # Place the group
-        if group[:type] == :side_by_side
-          # Place pieces side by side
+        # Place the group based on nesting type
+        if group[:type] == :manual && group[:pieces].length == 2
+          # Manual nesting with explicit positioning
+          p1, p2 = group[:pieces]
+          p1_rotate = config[:p1_rotate] || 0
+          p1_x = config[:p1_x] || 0
+          p1_y = config[:p1_y] || 0
+          p2_rotate = config[:p2_rotate] || 0
+          p2_x = config[:p2_x] || (p1.width + PIECE_SPACING)
+          p2_y = config[:p2_y] || 0
+
+          p1.board_offset = board[:used_length] + p1_y
+          p1.x_in_group = p1_x
+          p1.rotated_180 = (p1_rotate == 180)
+
+          p2.board_offset = board[:used_length] + p2_y
+          p2.x_in_group = p2_x
+          p2.rotated_180 = (p2_rotate == 180)
+        elsif group[:type] == :side_by_side
           x_offset = 0
           group[:pieces].each_with_index do |piece, idx|
             piece.board_offset = board[:used_length]
             piece.x_in_group = x_offset
-            piece.rotated_180 = (idx == 1)  # Rotate second piece 180° for nesting
+            piece.rotated_180 = (idx == 1)
             x_offset += piece.width + spacing
           end
         else
@@ -1102,15 +1330,30 @@ def pack_onto_boards_nested(pieces, board_length, board_width, spacing, margin)
     end
 
     unless placed
-      # Create new board
-      group_width = group[:pieces].sum(&:width) + (group[:pieces].length - 1) * spacing
+      # Create new board - handle nesting types
+      if group[:type] == :manual && group[:pieces].length == 2
+        # Manual nesting with explicit positioning
+        p1, p2 = group[:pieces]
+        p1_rotate = config[:p1_rotate] || 0
+        p1_x = config[:p1_x] || 0
+        p1_y = config[:p1_y] || 0
+        p2_rotate = config[:p2_rotate] || 0
+        p2_x = config[:p2_x] || (p1.width + PIECE_SPACING)
+        p2_y = config[:p2_y] || 0
 
-      if group[:type] == :side_by_side
+        p1.board_offset = margin + p1_y
+        p1.x_in_group = p1_x
+        p1.rotated_180 = (p1_rotate == 180)
+
+        p2.board_offset = margin + p2_y
+        p2.x_in_group = p2_x
+        p2.rotated_180 = (p2_rotate == 180)
+      elsif group[:type] == :side_by_side
         x_offset = 0
         group[:pieces].each_with_index do |piece, idx|
           piece.board_offset = margin
           piece.x_in_group = x_offset
-          piece.rotated_180 = (idx == 1)  # Rotate second piece 180°
+          piece.rotated_180 = (idx == 1)
           x_offset += piece.width + spacing
         end
       else
@@ -1211,7 +1454,7 @@ total_boards = narrow_boards.length + glueup_boards.length
 # Layout parameters
 board_gap = 1.0           # Gap between boards
 top_padding = 1.5         # Extra space at top for labels
-bottom_padding = 0.5
+bottom_padding = 2.5  # Extra space at bottom for labels and calibration square
 
 # Position pieces and track board layouts for SVG
 board_layouts = []
@@ -1220,26 +1463,33 @@ current_x = BOARD_MARGIN
 # Single boards first (side by side)
 max_board_length = 0
 narrow_boards.each_with_index do |board, idx|
-  # Calculate board width based on max group width (for side-by-side pieces)
+  # Calculate exact board width from pieces (no outer margin)
   group_width = board[:max_width] || board[:pieces].map { |p| p.width }.max
-  board_width = (group_width + 2 * PIECE_MARGIN).ceil  # Fit pieces + margin
+  board_width = group_width  # Exact piece width, no margin
 
-  # Calculate actual board length needed (used_length already includes initial margin)
-  board_length = (board[:used_length] + PIECE_MARGIN).ceil
+  # Calculate exact board length from pieces (no outer margin)
+  # Find the max extent of all pieces on this board
+  max_piece_extent = board[:pieces].map { |p| (p.board_offset - BOARD_MARGIN) + p.height }.max
+  board_length = max_piece_extent  # Exact piece extent, no margin
 
   board[:pieces].each do |piece|
-    # Use x_in_group for side-by-side positioning, with margin offset
+    # Position pieces at edge of board (no outer margin)
     x_offset = piece.x_in_group || 0
-    piece.x = current_x + PIECE_MARGIN + x_offset
-    piece.y = top_padding + piece.board_offset
+    piece.x = current_x + x_offset
+    piece.y = top_padding + (piece.board_offset - BOARD_MARGIN)  # Remove the margin that was added in packing
   end
+
+  # Create label with fractional dimensions
+  width_frac = inches_to_fraction(board_width)
+  length_frac = inches_to_fraction(board_length)
+
   board_layouts << {
     type: :standard,
     x: current_x,
     y: top_padding,
     width: board_width,
     length: board_length,
-    label: "Board #{idx + 1} (#{board_width}\"×#{board_length}\")"
+    label: "#{width_frac}\" × #{length_frac}\""
   }
   max_board_length = [max_board_length, board_length].max
   current_x += board_width + board_gap
@@ -1247,13 +1497,17 @@ end
 
 # Glue-up panels (continue side by side)
 glueup_boards.each_with_index do |board, idx|
-  # Calculate actual panel dimensions to fit the piece
+  # Calculate exact panel dimensions (no outer margin)
   piece = board[:pieces].first
-  panel_width = (piece.width + 2 * PIECE_MARGIN).ceil
-  panel_length = (piece.height + 2 * PIECE_MARGIN).ceil
+  panel_width = piece.width
+  panel_length = piece.height
 
-  piece.x = current_x + PIECE_MARGIN
-  piece.y = top_padding + PIECE_MARGIN
+  piece.x = current_x
+  piece.y = top_padding
+
+  # Create label with fractional dimensions
+  width_frac = inches_to_fraction(panel_width)
+  length_frac = inches_to_fraction(panel_length)
 
   board_layouts << {
     type: :glueup,
@@ -1261,14 +1515,14 @@ glueup_boards.each_with_index do |board, idx|
     y: top_padding,
     width: panel_width,
     length: panel_length,
-    label: "Panel #{idx + 1} (#{panel_width}\"×#{panel_length}\")"
+    label: "#{width_frac}\" × #{length_frac}\""
   }
   max_board_length = [max_board_length, panel_length].max
   current_x += panel_width + board_gap
 end
 
 svg_width = current_x + BOARD_MARGIN
-total_height = top_padding + max_board_length + bottom_padding + 1.5  # Extra space for labels
+total_height = top_padding + max_board_length + bottom_padding
 
 # Calculate totals with actual board dimensions
 total_standard_area = 0
@@ -1276,18 +1530,25 @@ board_summary = []
 board_layouts.select { |b| b[:type] == :standard }.each do |board|
   area = board[:width] * board[:length]
   total_standard_area += area
-  board_summary << "#{board[:width]}\"×#{board[:length]}\""
+  board_summary << "#{inches_to_fraction(board[:width])}\" × #{inches_to_fraction(board[:length])}\""
 end
 
 total_glueup_area = 0
 board_layouts.select { |b| b[:type] == :glueup }.each do |board|
   total_glueup_area += board[:width] * board[:length]
 end
-total_piece_area = pieces.sum { |p| p.width * p.height }
+# Calculate actual piece area from outer_boundary polygon (not bounding box)
+total_piece_area = pieces.sum { |p| polygon_area(p.outer_boundary) }
 total_area = total_standard_area + total_glueup_area
 efficiency = (total_piece_area / total_area * 100).round(1)
 
-panel_summary = board_layouts.select { |b| b[:type] == :glueup }.map { |b| "#{b[:width]}\"×#{b[:length]}\"" }
+panel_summary = board_layouts.select { |b| b[:type] == :glueup }.map { |b| "#{inches_to_fraction(b[:width])}\" × #{inches_to_fraction(b[:length])}\"" }
+
+# Board foot calculations (1 board foot = 12" × 12" × 1" = 144 cubic inches)
+# Since we're using 1" thick stock (4/4), board feet = sq in / 144
+board_feet_standard = total_standard_area / 144.0
+board_feet_glueup = total_glueup_area / 144.0
+board_feet_total = total_area / 144.0
 
 puts ""
 puts "MATERIAL SUMMARY:"
@@ -1298,14 +1559,26 @@ panel_summary.each { |p| puts "    #{p}" }
 puts "  Total material:  #{total_area.round(0)} sq in"
 puts "  Piece area:      #{total_piece_area.round(0)} sq in"
 puts "  Efficiency:      #{efficiency}%"
+puts ""
+puts "BOARD FEET (4/4 stock, 1\" thick):"
+puts "  Single boards:   #{board_feet_standard.round(2)} bf"
+puts "  Glue-up panels:  #{board_feet_glueup.round(2)} bf"
+puts "  Total needed:    #{board_feet_total.round(2)} bf"
+puts "  (Add 15-20% for waste/defects: #{(board_feet_total * 1.2).round(2)} bf recommended)"
 
 # Generate SVG with board layout visualization
 generator = MultiboardSVGGenerator.new(pieces, board_layouts, svg_width, total_height, BOARD_MARGIN)
-svg = generator.generate
 
+# Full version with backgrounds, grid, labels
+svg = generator.generate
 File.write(PIECES_LAYED_OUT_FILE, svg)
 puts ""
 puts "Generated #{PIECES_LAYED_OUT_FILE}"
+
+# CNC-friendly version (no backgrounds, just pieces and calibration square)
+svg_cnc = generator.generate(cnc_friendly: true)
+File.write(PIECES_LAYED_OUT_EASEL_FILE, svg_cnc)
+puts "Generated #{PIECES_LAYED_OUT_EASEL_FILE}"
 puts ""
 
 # Open in Cursor

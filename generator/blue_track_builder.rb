@@ -8,10 +8,11 @@ class BlueTrackBuilder
 
   attr_reader :points, :path_length, :segments
 
-  def initialize(definition, start_pt, start_dir)
+  def initialize(definition, start_pt, start_dir, enable_smooth_connector: true)
     @definition = definition
     @start_pt = start_pt.dup
     @start_dir = normalize(start_dir)
+    @enable_smooth_connector = enable_smooth_connector
     @points = []
     @segments = []  # Array of { index: N, type: :straight/:turn, points: [...] }
     @path_length = 0.0
@@ -73,20 +74,22 @@ class BlueTrackBuilder
       end
     end
 
-    # Add smooth connector back to start point
-    end_dir = current_dir
-    connector_pts = build_smooth_connector(current_pt, end_dir, @start_pt, @start_dir, 30)
-    @segments << { index: @definition.length, type: :connector, points: connector_pts }
-    @points += connector_pts[1..-1]  # Skip first (already added)
+    # Add smooth connector back to start point (if enabled)
+    if @enable_smooth_connector
+      end_dir = current_dir
+      connector_pts = build_smooth_connector(current_pt, end_dir, @start_pt, @start_dir, 30)
+      @segments << { index: @definition.length, type: :connector, points: connector_pts }
+      @points += connector_pts[1..-1]  # Skip first (already added)
 
-    # Update path length with connector
-    connector_length = 0.0
-    (1...connector_pts.length).each do |i|
-      dx = connector_pts[i][0] - connector_pts[i-1][0]
-      dy = connector_pts[i][1] - connector_pts[i-1][1]
-      connector_length += Math.sqrt(dx*dx + dy*dy)
+      # Update path length with connector
+      connector_length = 0.0
+      (1...connector_pts.length).each do |i|
+        dx = connector_pts[i][0] - connector_pts[i-1][0]
+        dy = connector_pts[i][1] - connector_pts[i-1][1]
+        connector_length += Math.sqrt(dx*dx + dy*dy)
+      end
+      @path_length += connector_length
     end
-    @path_length += connector_length
 
     @points
   end

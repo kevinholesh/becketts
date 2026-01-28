@@ -15,6 +15,7 @@ INPUT_FILE = 'silverstone.svg'
 OUTPUT_FILE = 'silverstone-split.svg'
 PIECES_FILE = 'pieces.svg'
 PIECES_LAYED_OUT_FILE = 'pieces-layed-out.svg'
+PIECES_LAYED_OUT_EASEL_FILE = 'pieces-layed-out-to-easel.svg'
 
 # Hot Wheels Premium F1 car dimensions (inches)
 PREMIUM_CAR_LENGTH_IN = 3.47
@@ -133,16 +134,15 @@ BLUE_TRACK_DEFINITION = [
   { type: :straight, length: 1 },
   { type: :turn, radius: 4.3, angle: 50, direction: :right },
   { type: :straight, length: 1.2 },
-  { type: :turn, radius: 4.5, angle: 63, direction: :left },
+  { type: :turn, radius: 4.5, angle: 60, direction: :left },
   { type: :straight, length: 0.2 },
-  { type: :turn, radius: 3.1, angle: 97, direction: :right },
-  { type: :straight, length: 2 },
+  { type: :turn, radius: 3.1, angle: 94.5, direction: :right },
+  # { type: :straight, length: 0 },
   { type: :turn, radius: 7, angle: 27.9, direction: :left },
-  { type: :straight, length: 26.5 },
+  { type: :straight, length: 28 },
   { type: :turn, radius: 3.3, angle: 100, direction: :right },
-  { type: :turn, radius: 5, angle: 30, direction: :right },
-  { type: :turn, radius: 5, angle: 13, direction: :left },
-  { type: :straight, length: 9.65 },
+  { type: :turn, radius: 5, angle: 16, direction: :right },
+  { type: :straight, length: 12.04 },
   { type: :turn, radius: MIN_TURN_RADIUS_IN, angle: 100, direction: :left },
   { type: :turn, radius: 3, angle: 171, direction: :right },
   { type: :straight, length: 4 },
@@ -166,15 +166,17 @@ MANUAL_SPLITS = [
   0.13,
   0.215,
   0.31,
-  # # 0.365, # Maybe rethink this one
   0.425,
   0.524,
   0.595,
   0.715,
-  0.84,
+  0.843,
   0.915,
 ]
 
+# Enable/disable the smooth bezier connector from last piece back to start
+# Set to false for testing to see the raw primitive chain without the closing connector
+ENABLE_SMOOTH_CONNECTOR = true
 
 # Visual settings for split preview (all dimensions in inches)
 SPLIT_LINE_COLOR = '#FF0000'
@@ -1032,7 +1034,7 @@ class SplitVisualizer
     puts "Building blue track from BLUE_TRACK_DEFINITION (#{BLUE_TRACK_DEFINITION.length} primitives)"
 
     # Build the complete blue track
-    builder = BlueTrackBuilder.new(BLUE_TRACK_DEFINITION, start_pt, start_dir)
+    builder = BlueTrackBuilder.new(BLUE_TRACK_DEFINITION, start_pt, start_dir, enable_smooth_connector: ENABLE_SMOOTH_CONNECTOR)
     all_points = builder.build
 
     closure_gap = builder.closure_gap
@@ -1835,6 +1837,7 @@ class PieceLayoutGenerator
 
       # Normalize all shapes to origin (0,0)
       inner_channel_normalized = shapes[:inner_channel].map { |p| [p[0] - min_x, p[1] - min_y] }
+      outer_boundary_normalized = shapes[:outer_boundary].map { |p| [p[0] - min_x, p[1] - min_y] }
       left_wall_normalized = shapes[:left_wall].map { |p| [p[0] - min_x, p[1] - min_y] }
       right_wall_normalized = shapes[:right_wall].map { |p| [p[0] - min_x, p[1] - min_y] }
 
@@ -1857,6 +1860,7 @@ class PieceLayoutGenerator
         arc_length: arc_length,
         straightness: straightness,
         inner_channel: inner_channel_normalized,
+        outer_boundary: outer_boundary_normalized,
         left_wall: left_wall_normalized,
         right_wall: right_wall_normalized
       }
@@ -1961,13 +1965,16 @@ class PieceLayoutGenerator
     # Inner channel: the area where the car runs (between inner edges)
     inner_channel = inner_left + inner_right.reverse
 
+    # Outer boundary: the full piece outline (outer edges only)
+    outer_boundary = outer_left + outer_right.reverse
+
     # Left sidewall: between outer_left and inner_left
     left_wall = outer_left + inner_left.reverse
 
     # Right sidewall: between inner_right and outer_right
     right_wall = outer_right + inner_right.reverse
 
-    { inner_channel: inner_channel, left_wall: left_wall, right_wall: right_wall }
+    { inner_channel: inner_channel, outer_boundary: outer_boundary, left_wall: left_wall, right_wall: right_wall }
   end
 
   def calculate_layout(pieces)
@@ -2101,8 +2108,9 @@ piece_data = visualizer.generate
 piece_layout = PieceLayoutGenerator.new(piece_data, INNER_TRACK_WIDTH_IN, SIDEWALL_THICKNESS_IN)
 piece_layout.generate
 
+# Keep these comments
 puts ""
 print 'Opening in Cursor...'
-system("cursor", OUTPUT_FILE) # Keep this comment
-# system("cursor", PIECES_FILE) # Keep this comment
+# system("cursor", OUTPUT_FILE)
+# system("cursor", PIECES_FILE)
 # system("cursor", PIECES_LAYED_OUT_FILE)
