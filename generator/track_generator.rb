@@ -14,6 +14,7 @@ require_relative 'blue_track_builder'
 INPUT_FILE = 'silverstone.svg'
 OUTPUT_FILE = 'silverstone-split.svg'
 PIECES_FILE = 'pieces.svg'
+PIECES_LAYED_OUT_FILE = 'pieces-layed-out.svg'
 
 # Hot Wheels Premium F1 car dimensions (inches)
 PREMIUM_CAR_LENGTH_IN = 3.47
@@ -1818,21 +1819,24 @@ class PieceLayoutGenerator
       # Rotate all centerline points to be vertical
       rotated_centerline = points.map { |p| rotate_point(p, vertical_angle, start_pt) }
 
-      # Build solid track shape from rotated centerline
-      solid_shape = build_solid_shape(rotated_centerline)
-      next unless solid_shape
+      # Build both inner channel and sidewall shapes from rotated centerline
+      shapes = build_all_shapes(rotated_centerline)
+      next unless shapes
 
-      # Calculate bounding box
-      min_x = solid_shape.map { |p| p[0] }.min
-      max_x = solid_shape.map { |p| p[0] }.max
-      min_y = solid_shape.map { |p| p[1] }.min
-      max_y = solid_shape.map { |p| p[1] }.max
+      # Calculate bounding box from outer shape (sidewalls define the full extent)
+      all_wall_pts = shapes[:left_wall] + shapes[:right_wall]
+      min_x = all_wall_pts.map { |p| p[0] }.min
+      max_x = all_wall_pts.map { |p| p[0] }.max
+      min_y = all_wall_pts.map { |p| p[1] }.min
+      max_y = all_wall_pts.map { |p| p[1] }.max
 
       width = max_x - min_x
       height = max_y - min_y
 
-      # Normalize points to origin (0,0)
-      shape_normalized = solid_shape.map { |p| [p[0] - min_x, p[1] - min_y] }
+      # Normalize all shapes to origin (0,0)
+      inner_channel_normalized = shapes[:inner_channel].map { |p| [p[0] - min_x, p[1] - min_y] }
+      left_wall_normalized = shapes[:left_wall].map { |p| [p[0] - min_x, p[1] - min_y] }
+      right_wall_normalized = shapes[:right_wall].map { |p| [p[0] - min_x, p[1] - min_y] }
 
       # Calculate arc length (actual track length)
       arc_length = 0.0
@@ -1852,7 +1856,9 @@ class PieceLayoutGenerator
         height: height,
         arc_length: arc_length,
         straightness: straightness,
-        shape_pts: shape_normalized
+        inner_channel: inner_channel_normalized,
+        left_wall: left_wall_normalized,
+        right_wall: right_wall_normalized
       }
 
       inventory << {
@@ -1871,6 +1877,7 @@ class PieceLayoutGenerator
     # Print inventory
     puts ""
     puts "PIECE INVENTORY:"
+    puts "  Track width: #{@inner_width}\" channel + #{@sidewall_thickness}\" sidewalls x2 = #{@total_width}\" total"
     puts "-" * 60
     puts "  #   | Bounding Box     | Track Length | Straightness"
     puts "-" * 60
@@ -1905,14 +1912,19 @@ class PieceLayoutGenerator
 
   private
 
-  # Build a solid closed shape for the track piece (not railroad style)
-  def build_solid_shape(points)
+  # Build all shapes for a piece: inner channel and two sidewalls
+  # Returns: { inner_channel: [...], left_wall: [...], right_wall: [...] }
+  def build_all_shapes(points)
     return nil if points.nil? || points.length < 2
 
-    half_width = @total_width / 2.0
+    half_total = @total_width / 2.0
+    half_inner = @inner_width / 2.0
 
-    left_edge = []
-    right_edge = []
+    # Four edge lines: outer left, inner left, inner right, outer right
+    outer_left = []
+    inner_left = []
+    inner_right = []
+    outer_right = []
 
     points.each_with_index do |pt, i|
       # Calculate tangent direction
@@ -1938,14 +1950,24 @@ class PieceLayoutGenerator
       norm_x = -dy / len
       norm_y = dx / len
 
-      left_edge << [pt[0] + norm_x * half_width, pt[1] + norm_y * half_width]
-      right_edge << [pt[0] - norm_x * half_width, pt[1] - norm_y * half_width]
+      outer_left << [pt[0] + norm_x * half_total, pt[1] + norm_y * half_total]
+      inner_left << [pt[0] + norm_x * half_inner, pt[1] + norm_y * half_inner]
+      inner_right << [pt[0] - norm_x * half_inner, pt[1] - norm_y * half_inner]
+      outer_right << [pt[0] - norm_x * half_total, pt[1] - norm_y * half_total]
     end
 
-    return nil if left_edge.length < 2
+    return nil if outer_left.length < 2
 
-    # Build closed polygon: left edge forward, right edge backward
-    left_edge + right_edge.reverse
+    # Inner channel: the area where the car runs (between inner edges)
+    inner_channel = inner_left + inner_right.reverse
+
+    # Left sidewall: between outer_left and inner_left
+    left_wall = outer_left + inner_left.reverse
+
+    # Right sidewall: between inner_right and outer_right
+    right_wall = outer_right + inner_right.reverse
+
+    { inner_channel: inner_channel, left_wall: left_wall, right_wall: right_wall }
   end
 
   def calculate_layout(pieces)
@@ -1998,7 +2020,8 @@ class PieceLayoutGenerator
            height="#{height}in"
            viewBox="0 0 #{width} #{height}">
       <style>
-        .track { fill: #333333; stroke: none; }
+        .inner-channel { fill: #AAAAAA; stroke: none; }
+        .sidewall { fill: #333333; stroke: none; }
         .label { font-family: Arial, sans-serif; font-weight: bold; fill: #333; }
         .note { font-family: Arial, sans-serif; font-size: 0.2px; fill: #666; }
         .calibration { fill: #333333; stroke: none; }
@@ -2018,9 +2041,17 @@ class PieceLayoutGenerator
       translate_x = pos[:x]
       translate_y = pos[:y]
 
-      # Solid track shape
-      track_path = polygon_to_path(piece[:shape_pts], translate_x, translate_y)
-      svg += %(<path d="#{track_path}" class="track" />\n)
+      # Inner channel (light gray) - where the car runs
+      channel_path = polygon_to_path(piece[:inner_channel], translate_x, translate_y)
+      svg += %(<path d="#{channel_path}" class="inner-channel" />\n)
+
+      # Left sidewall (black)
+      left_wall_path = polygon_to_path(piece[:left_wall], translate_x, translate_y)
+      svg += %(<path d="#{left_wall_path}" class="sidewall" />\n)
+
+      # Right sidewall (black)
+      right_wall_path = polygon_to_path(piece[:right_wall], translate_x, translate_y)
+      svg += %(<path d="#{right_wall_path}" class="sidewall" />\n)
 
       # Piece label - positioned above the piece
       label_x = translate_x + piece[:width] / 2
@@ -2072,4 +2103,6 @@ piece_layout.generate
 
 puts ""
 print 'Opening in Cursor...'
-system("cursor", PIECES_FILE)
+system("cursor", OUTPUT_FILE) # Keep this comment
+# system("cursor", PIECES_FILE) # Keep this comment
+# system("cursor", PIECES_LAYED_OUT_FILE)
