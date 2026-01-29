@@ -50,7 +50,7 @@ TEST_CAR_OPACITY = 0.7
 # Track cross-section (U-shape profile, all in inches)
 # The track is a U-shaped channel: two sidewalls with the car riding in between
 INNER_TRACK_WIDTH_IN = 1.75   # Width of the channel where the car rides
-SIDEWALL_THICKNESS_IN = 0.2  # Thickness of each side wall
+SIDEWALL_THICKNESS_IN = 0.35  # Thickness of each side wall
 SIDEWALL_HEIGHT_IN = 0.375     # Height of the side walls
 
 # Total track width = inner channel + two sidewalls
